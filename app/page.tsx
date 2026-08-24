@@ -31,6 +31,7 @@ import {
   UploadedScreenshot,
   analyzeScreenshotPlaces,
 } from "@/lib/vision";
+import { buildItinerary } from "@/lib/itineraryEngine";
 
 // Category configurations with distinct Earth Tone borders and badges
 const CATEGORY_CONFIG: Record<
@@ -80,11 +81,13 @@ const SAMPLE_SCREENSHOTS = [
     name: "paris_reels_saved.jpg",
     previewUrl: "https://images.unsplash.com/photo-1502602898657-3e91760cbb34?w=400&q=80",
     label: "Paris Saved Reels",
+    defaultDestination: "Paris, France",
   },
   {
     name: "tokyo_spots_camera_roll.jpg",
     previewUrl: "https://images.unsplash.com/photo-1540959733332-eab4deabeeaf?w=400&q=80",
     label: "Tokyo Travel Spots",
+    defaultDestination: "Tokyo, Japan",
   },
 ];
 
@@ -121,14 +124,63 @@ export default function Home() {
     return Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
   }, [startDate, endDate]);
 
+  const inferDestinationFromPlaces = (places: ExtractedPlace[]): string | undefined => {
+    if (!places || places.length === 0) return undefined;
+
+    // 1. Check for explicit Paris or Tokyo keywords in extracted places text
+    for (const place of places) {
+      const fullText = `${place.locationHint || ""} ${place.title} ${place.notes || ""} ${place.rawDetectedText || ""}`.toLowerCase();
+      if (fullText.includes("paris") || fullText.includes("eiffel") || fullText.includes("louvre") || fullText.includes("france")) {
+        return "Paris, France";
+      }
+      if (fullText.includes("tokyo") || fullText.includes("shibuya") || fullText.includes("shinjuku") || fullText.includes("japan")) {
+        return "Tokyo, Japan";
+      }
+    }
+
+    // 2. Prefer explicit locationHint from Gemini
+    for (const place of places) {
+      if (place.locationHint && place.locationHint.trim()) {
+        return place.locationHint.trim();
+      }
+    }
+
+    // 3. Check notes, title, or raw text for location patterns (City, Country)
+    for (const place of places) {
+      const text = `${place.title} ${place.notes || ""} ${place.rawDetectedText || ""}`;
+      const match = text.match(/([A-Z][a-zA-Z\s]+,\s*[A-Z][a-zA-Z\s]+)/);
+      if (match && match[1]) return match[1].trim();
+    }
+    return undefined;
+  };
+
   const handleFileUpload = async (files: FileList | File[]) => {
+    if (isProcessing) return;
+
     const newFiles = Array.from(files);
     if (newFiles.length === 0) return;
+
+    // Filter out duplicate files currently in progress or completed
+    const existingNames = new Set(screenshots.map((s) => s.name));
+    const uniqueFiles = newFiles.filter((f) => !existingNames.has(f.name));
+
+    if (uniqueFiles.length === 0) {
+      setFormError("The selected screenshot(s) have already been uploaded or analyzed.");
+      setTimeout(() => {
+        document.getElementById("identified-places-section")?.scrollIntoView({ behavior: "smooth" });
+      }, 100);
+      return;
+    }
 
     setIsProcessing(true);
     setFormError(null);
 
-    const newScreenshots: UploadedScreenshot[] = newFiles.map((file, idx) => ({
+    // Scroll down to vision generation section so user can watch places extract in real-time
+    setTimeout(() => {
+      document.getElementById("identified-places-section")?.scrollIntoView({ behavior: "smooth" });
+    }, 100);
+
+    const newScreenshots: UploadedScreenshot[] = uniqueFiles.map((file, idx) => ({
       id: `scr-${Date.now()}-${idx}`,
       file,
       previewUrl: URL.createObjectURL(file),
@@ -155,12 +207,22 @@ export default function Home() {
           )
         );
       } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : "Failed to extract places from image";
-        setFormError(message);
+        const rawMsg = err instanceof Error ? err.message : "Failed to extract places from image";
+        const isQuotaErr =
+          rawMsg.includes("429") ||
+          rawMsg.includes("RESOURCE_EXHAUSTED") ||
+          rawMsg.toLowerCase().includes("quota") ||
+          rawMsg.toLowerCase().includes("rate limit");
+
+        const friendlyMsg = isQuotaErr
+          ? "AI quota temporarily exceeded (Rate Limit). Please wait a few seconds before uploading again."
+          : rawMsg;
+
+        setFormError(friendlyMsg);
         setScreenshots((prev) =>
           prev.map((s) =>
             s.id === screenshot.id
-              ? { ...s, status: "error", errorMessage: message }
+              ? { ...s, status: "error", errorMessage: friendlyMsg }
               : s
           )
         );
@@ -169,14 +231,38 @@ export default function Home() {
 
     if (allNewExtractedPlaces.length > 0) {
       setExtractedPlaces((prev) => [...allNewExtractedPlaces, ...prev]);
+      setDestination((currentDest) => {
+        const inferred = inferDestinationFromPlaces(allNewExtractedPlaces);
+        return inferred || currentDest;
+      });
     }
 
     setIsProcessing(false);
   };
 
   const handleAddSampleScreenshot = async (sample: (typeof SAMPLE_SCREENSHOTS)[0]) => {
+    if (isProcessing) return;
+
+    // Check if this sample has already been uploaded/analyzed
+    const isAlreadyAdded = screenshots.some((s) => s.name === sample.name);
+    if (isAlreadyAdded) {
+      setFormError(`"${sample.label}" has already been uploaded and analyzed.`);
+      setTimeout(() => {
+        document.getElementById("identified-places-section")?.scrollIntoView({ behavior: "smooth" });
+      }, 100);
+      return;
+    }
+
     setIsProcessing(true);
     setFormError(null);
+
+    // Set destination immediately based on sample chosen
+    setDestination(sample.defaultDestination);
+
+    // Scroll down to vision generation section so user sees the extracted places appearing
+    setTimeout(() => {
+      document.getElementById("identified-places-section")?.scrollIntoView({ behavior: "smooth" });
+    }, 100);
 
     const mockScreenshot: UploadedScreenshot = {
       id: `sample-${Date.now()}`,
@@ -193,6 +279,11 @@ export default function Home() {
       const places = await analyzeScreenshotPlaces(mockScreenshot);
       setExtractedPlaces((prev) => [...places, ...prev]);
 
+      setDestination((currentDest) => {
+        const inferred = inferDestinationFromPlaces(places);
+        return inferred || sample.defaultDestination || currentDest;
+      });
+
       setScreenshots((prev) =>
         prev.map((s) =>
           s.id === mockScreenshot.id
@@ -201,12 +292,22 @@ export default function Home() {
         )
       );
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Failed to analyze sample image";
-      setFormError(message);
+      const rawMsg = err instanceof Error ? err.message : "Failed to analyze sample image";
+      const isQuotaErr =
+        rawMsg.includes("429") ||
+        rawMsg.includes("RESOURCE_EXHAUSTED") ||
+        rawMsg.toLowerCase().includes("quota") ||
+        rawMsg.toLowerCase().includes("rate limit");
+
+      const friendlyMsg = isQuotaErr
+        ? "AI quota temporarily exceeded (Rate Limit). Please wait a few seconds before uploading again."
+        : rawMsg;
+
+      setFormError(friendlyMsg);
       setScreenshots((prev) =>
         prev.map((s) =>
           s.id === mockScreenshot.id
-            ? { ...s, status: "error", errorMessage: message }
+            ? { ...s, status: "error", errorMessage: friendlyMsg }
             : s
         )
       );
@@ -250,7 +351,18 @@ export default function Home() {
   };
 
   const handleGenerateItinerary = () => {
-    if (!destination.trim()) {
+    let activeDest = destination.trim();
+
+    // Infer destination automatically if user didn't enter one manually
+    if (!activeDest && extractedPlaces.length > 0) {
+      const inferred = inferDestinationFromPlaces(extractedPlaces);
+      if (inferred) {
+        activeDest = inferred;
+        setDestination(inferred);
+      }
+    }
+
+    if (!activeDest) {
       setFormError("Please enter a destination city or country.");
       return;
     }
@@ -273,27 +385,7 @@ export default function Home() {
   };
 
   const dailySchedule = useMemo(() => {
-    const totalDays = Math.max(1, tripDaysCount || 3);
-    const schedule: Record<
-      number,
-      { morning: ExtractedPlace[]; afternoon: ExtractedPlace[]; evening: ExtractedPlace[] }
-    > = {};
-
-    for (let day = 1; day <= totalDays; day++) {
-      schedule[day] = { morning: [], afternoon: [], evening: [] };
-    }
-
-    if (extractedPlaces.length === 0) return schedule;
-
-    extractedPlaces.forEach((place, idx) => {
-      const dayTarget = (idx % totalDays) + 1;
-      const slotIdx = Math.floor(idx / totalDays) % 3;
-      if (slotIdx === 0) schedule[dayTarget].morning.push(place);
-      else if (slotIdx === 1) schedule[dayTarget].afternoon.push(place);
-      else schedule[dayTarget].evening.push(place);
-    });
-
-    return schedule;
+    return buildItinerary(extractedPlaces, tripDaysCount);
   }, [extractedPlaces, tripDaysCount]);
 
   return (
@@ -345,17 +437,42 @@ export default function Home() {
             <div className="space-y-2">
               <span className="text-xs font-bold text-stone-700 block">Try with sample uploads:</span>
               <div className="flex flex-wrap gap-2">
-                {SAMPLE_SCREENSHOTS.map((sample, idx) => (
-                  <button
-                    key={idx}
-                    type="button"
-                    onClick={() => handleAddSampleScreenshot(sample)}
-                    className="px-3.5 py-2 rounded-xl text-xs font-bold bg-white hover:bg-[#faf6f0] text-stone-800 border border-[#c9bdac] transition-all duration-200 hover:-translate-y-0.5 active:scale-[0.98] flex items-center gap-2 shadow-2xs"
-                  >
-                    <ImageIcon className="w-3.5 h-3.5 text-[#c25e40]" />
-                    <span>{sample.label}</span>
-                  </button>
-                ))}
+                {SAMPLE_SCREENSHOTS.map((sample, idx) => {
+                  const isAnalyzingThisSample = screenshots.some(
+                    (s) => s.name === sample.name && s.status === "analyzing"
+                  );
+                  const isDoneThisSample = screenshots.some(
+                    (s) => s.name === sample.name && s.status === "completed"
+                  );
+
+                  return (
+                    <button
+                      key={idx}
+                      type="button"
+                      disabled={isProcessing || isDoneThisSample}
+                      onClick={() => handleAddSampleScreenshot(sample)}
+                      className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all duration-200 flex items-center gap-2 shadow-2xs ${
+                        isDoneThisSample
+                          ? "bg-emerald-50 text-emerald-900 border border-emerald-300 cursor-not-allowed opacity-80"
+                          : isProcessing
+                          ? "bg-stone-100 text-stone-400 border border-stone-300 cursor-not-allowed opacity-50"
+                          : "bg-white hover:bg-[#faf6f0] text-stone-800 border border-[#c9bdac] hover:-translate-y-0.5 active:scale-[0.98]"
+                      }`}
+                    >
+                      {isAnalyzingThisSample ? (
+                        <RefreshCw className="w-3.5 h-3.5 text-[#c25e40] animate-spin" />
+                      ) : isDoneThisSample ? (
+                        <Check className="w-3.5 h-3.5 text-emerald-600" />
+                      ) : (
+                        <ImageIcon className="w-3.5 h-3.5 text-[#c25e40]" />
+                      )}
+                      <span>
+                        {sample.label}
+                        {isDoneThisSample ? " (Added)" : isAnalyzingThisSample ? " (Analyzing...)" : ""}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -484,36 +601,61 @@ export default function Home() {
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={(e) => {
                   e.preventDefault();
-                  if (e.dataTransfer.files) handleFileUpload(e.dataTransfer.files);
+                  if (!isProcessing && e.dataTransfer.files) handleFileUpload(e.dataTransfer.files);
                 }}
-                onClick={() => fileInputRef.current?.click()}
-                className="group border-2 border-dashed border-[#d8ccbc] hover:border-[#c25e40] bg-[#faf6f0]/70 hover:bg-[#f7efe6] rounded-2xl p-8 text-center cursor-pointer transition-all duration-300 flex flex-col items-center justify-center gap-3 transform hover:-translate-y-0.5"
+                onClick={() => !isProcessing && fileInputRef.current?.click()}
+                className={`group border-2 border-dashed rounded-2xl p-8 text-center transition-all duration-300 flex flex-col items-center justify-center gap-3 ${
+                  isProcessing
+                    ? "border-amber-300 bg-amber-50/50 cursor-not-allowed opacity-80"
+                    : "border-[#d8ccbc] hover:border-[#c25e40] bg-[#faf6f0]/70 hover:bg-[#f7efe6] cursor-pointer transform hover:-translate-y-0.5"
+                }`}
               >
                 <input
                   ref={fileInputRef}
                   type="file"
                   multiple
+                  disabled={isProcessing}
                   accept="image/*"
                   onChange={(e) => e.target.files && handleFileUpload(e.target.files)}
                   className="hidden"
                 />
 
-                <div className="h-14 w-14 rounded-2xl bg-white border border-[#d6ceb8] flex items-center justify-center text-[#c25e40] shadow-xs group-hover:scale-110 group-hover:border-[#c25e40] transition-all duration-300">
-                  <UploadCloud className="w-7 h-7 text-[#c25e40]" />
+                <div className="h-14 w-14 rounded-2xl bg-white border border-[#d6ceb8] flex items-center justify-center text-[#c25e40] shadow-xs transition-all duration-300">
+                  {isProcessing ? (
+                    <RefreshCw className="w-7 h-7 text-[#c25e40] animate-spin" />
+                  ) : (
+                    <UploadCloud className="w-7 h-7 text-[#c25e40]" />
+                  )}
                 </div>
 
                 <div className="space-y-1 max-w-md">
                   <p className="font-display font-bold text-base text-stone-900">
-                    Click to select screenshots or drag and drop
+                    {isProcessing
+                      ? "Analyzing screenshot with Gemini Vision API..."
+                      : "Click to select screenshots or drag and drop"}
                   </p>
                   <p className="text-xs text-stone-600 leading-relaxed font-normal">
-                    Upload camera roll screenshots, saved reels, TikToks, or place photos. Supports PNG, JPG, WEBP.
+                    {isProcessing
+                      ? "Please wait while Gemini Vision extracts places, categories, and locations."
+                      : "Upload camera roll screenshots, saved reels, TikToks, or place photos. Supports PNG, JPG, WEBP."}
                   </p>
                 </div>
 
-                <span className="px-4 py-2 rounded-xl text-xs font-bold bg-white text-[#c25e40] border border-[#d6ceb8] shadow-xs inline-flex items-center gap-2 group-hover:bg-[#faf6f0] group-hover:border-[#c25e40] transition-all duration-200">
-                  <Camera className="w-4 h-4" /> Choose Camera Roll Photos
-                </span>
+                <button
+                  type="button"
+                  disabled={isProcessing}
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-white text-[#c25e40] border border-[#d6ceb8] shadow-xs inline-flex items-center gap-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isProcessing ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin text-[#c25e40]" /> Analyzing...
+                    </>
+                  ) : (
+                    <>
+                      <Camera className="w-4 h-4" /> Choose Camera Roll Photos
+                    </>
+                  )}
+                </button>
               </div>
 
               {/* Uploaded Screenshots Grid Preview */}
@@ -653,7 +795,10 @@ export default function Home() {
         </section>
 
         {/* Step 3: Extracted & Identified Places Review List with Colored Earth Tone Cards */}
-        <section className="bg-white rounded-2xl border border-[#e5ded4] p-6 shadow-card space-y-5 transition-all hover:border-[#d6ceb8]">
+        <section
+          id="identified-places-section"
+          className="bg-white rounded-2xl border border-[#e5ded4] p-6 shadow-card space-y-5 transition-all hover:border-[#d6ceb8]"
+        >
           <div className="flex items-center justify-between border-b border-[#f0e9df] pb-3.5">
             <div className="flex items-center gap-2.5">
               <span className="h-7 w-7 rounded-lg bg-[#c25e40] text-white font-display font-extrabold text-xs flex items-center justify-center shadow-2xs">
@@ -852,6 +997,24 @@ export default function Home() {
                 </h4>
               </div>
 
+              {/* Accommodations Reference Banner */}
+              {dailySchedule[activeDay]?.accommodations && dailySchedule[activeDay].accommodations.length > 0 && (
+                <div className="p-3.5 rounded-xl bg-purple-50/90 border border-purple-200 flex items-center justify-between gap-3 text-xs font-semibold text-purple-950 shadow-2xs">
+                  <div className="flex items-center gap-2">
+                    <Hotel className="w-4 h-4 text-purple-700 shrink-0" />
+                    <span>
+                      Hotel / Stay:{" "}
+                      <strong>
+                        {dailySchedule[activeDay].accommodations.map((acc) => acc.title).join(", ")}
+                      </strong>
+                    </span>
+                  </div>
+                  <span className="text-[10px] bg-purple-200 text-purple-900 px-2 py-0.5 rounded-md font-bold shrink-0">
+                    Stay Reserved
+                  </span>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {/* Morning Slot - Warm Sand */}
                 <div className="p-4.5 rounded-2xl bg-[#faf5ec] border border-[#e8ddcc] space-y-3 shadow-2xs">
@@ -860,22 +1023,39 @@ export default function Home() {
                     <span>Morning (9:00 AM - 12:00 PM)</span>
                   </div>
                   {dailySchedule[activeDay]?.morning.length === 0 ? (
-                    <p className="text-xs text-stone-500 italic">Free time / Leisure walk</p>
+                    <div className="py-6 px-3 text-center border border-dashed border-[#e2d5c3] rounded-xl bg-white/40 space-y-1">
+                      <Clock className="w-4 h-4 text-amber-700/40 mx-auto" />
+                      <p className="text-xs font-bold text-stone-600">No saved places for this slot</p>
+                      <p className="text-[11px] text-stone-500">Upload screenshot or add place manually</p>
+                    </div>
                   ) : (
-                    dailySchedule[activeDay].morning.map((place) => (
-                      <div
-                        key={place.id}
-                        className="p-3.5 rounded-xl bg-white border border-[#e2d5c3] shadow-card space-y-1 hover:border-[#c25e40]/50 transition-colors"
-                      >
-                        <div className="flex items-center justify-between text-xs font-bold text-stone-900">
-                          <span>{place.title}</span>
-                          <span>{CATEGORY_CONFIG[place.category]?.icon}</span>
+                    dailySchedule[activeDay].morning.map((place) => {
+                      const catInfo = CATEGORY_CONFIG[place.category];
+                      return (
+                        <div
+                          key={place.id}
+                          className="p-3.5 rounded-xl bg-white border border-[#e2d5c3] shadow-card space-y-1.5 hover:border-[#c25e40]/50 transition-colors"
+                        >
+                          <div className="flex items-start justify-between gap-2 text-xs font-bold text-stone-900">
+                            <span className="leading-snug">{place.title}</span>
+                            <span className="shrink-0">{catInfo?.icon}</span>
+                          </div>
+                          {place.locationHint && (
+                            <p className="text-[11px] text-[#c25e40] font-semibold flex items-center gap-1">
+                              <MapPin className="w-3 h-3 shrink-0" /> {place.locationHint}
+                            </p>
+                          )}
+                          {place.notes && (
+                            <p className="text-[11px] text-stone-600 font-medium">📝 {place.notes}</p>
+                          )}
+                          {place.estimatedCost && (
+                            <span className="inline-block text-[10px] font-bold px-2 py-0.5 rounded bg-amber-100/80 text-amber-900 border border-amber-300/60">
+                              Cost: {place.estimatedCost}
+                            </span>
+                          )}
                         </div>
-                        {place.notes && (
-                          <p className="text-[11px] text-stone-600 font-medium">{place.notes}</p>
-                        )}
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
 
@@ -886,22 +1066,39 @@ export default function Home() {
                     <span>Afternoon (1:00 PM - 5:00 PM)</span>
                   </div>
                   {dailySchedule[activeDay]?.afternoon.length === 0 ? (
-                    <p className="text-xs text-stone-500 italic">Explore local area</p>
+                    <div className="py-6 px-3 text-center border border-dashed border-[#c2d4cb] rounded-xl bg-white/40 space-y-1">
+                      <Clock className="w-4 h-4 text-emerald-700/40 mx-auto" />
+                      <p className="text-xs font-bold text-stone-600">No saved places for this slot</p>
+                      <p className="text-[11px] text-stone-500">Upload screenshot or add place manually</p>
+                    </div>
                   ) : (
-                    dailySchedule[activeDay].afternoon.map((place) => (
-                      <div
-                        key={place.id}
-                        className="p-3.5 rounded-xl bg-white border border-[#c2d4cb] shadow-card space-y-1 hover:border-emerald-400 transition-colors"
-                      >
-                        <div className="flex items-center justify-between text-xs font-bold text-stone-900">
-                          <span>{place.title}</span>
-                          <span>{CATEGORY_CONFIG[place.category]?.icon}</span>
+                    dailySchedule[activeDay].afternoon.map((place) => {
+                      const catInfo = CATEGORY_CONFIG[place.category];
+                      return (
+                        <div
+                          key={place.id}
+                          className="p-3.5 rounded-xl bg-white border border-[#c2d4cb] shadow-card space-y-1.5 hover:border-emerald-400 transition-colors"
+                        >
+                          <div className="flex items-start justify-between gap-2 text-xs font-bold text-stone-900">
+                            <span className="leading-snug">{place.title}</span>
+                            <span className="shrink-0">{catInfo?.icon}</span>
+                          </div>
+                          {place.locationHint && (
+                            <p className="text-[11px] text-emerald-800 font-semibold flex items-center gap-1">
+                              <MapPin className="w-3 h-3 shrink-0" /> {place.locationHint}
+                            </p>
+                          )}
+                          {place.notes && (
+                            <p className="text-[11px] text-stone-600 font-medium">📝 {place.notes}</p>
+                          )}
+                          {place.estimatedCost && (
+                            <span className="inline-block text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100/80 text-emerald-900 border border-emerald-300/60">
+                              Cost: {place.estimatedCost}
+                            </span>
+                          )}
                         </div>
-                        {place.notes && (
-                          <p className="text-[11px] text-stone-600 font-medium">{place.notes}</p>
-                        )}
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
 
@@ -912,22 +1109,39 @@ export default function Home() {
                     <span>Evening (6:00 PM - 10:00 PM)</span>
                   </div>
                   {dailySchedule[activeDay]?.evening.length === 0 ? (
-                    <p className="text-xs text-stone-500 italic">Dinner & Evening Stroll</p>
+                    <div className="py-6 px-3 text-center border border-dashed border-[#dfccc7] rounded-xl bg-white/40 space-y-1">
+                      <Clock className="w-4 h-4 text-[#c25e40]/40 mx-auto" />
+                      <p className="text-xs font-bold text-stone-600">No saved places for this slot</p>
+                      <p className="text-[11px] text-stone-500">Upload screenshot or add place manually</p>
+                    </div>
                   ) : (
-                    dailySchedule[activeDay].evening.map((place) => (
-                      <div
-                        key={place.id}
-                        className="p-3.5 rounded-xl bg-white border border-[#dfccc7] shadow-card space-y-1 hover:border-[#c25e40]/50 transition-colors"
-                      >
-                        <div className="flex items-center justify-between text-xs font-bold text-stone-900">
-                          <span>{place.title}</span>
-                          <span>{CATEGORY_CONFIG[place.category]?.icon}</span>
+                    dailySchedule[activeDay].evening.map((place) => {
+                      const catInfo = CATEGORY_CONFIG[place.category];
+                      return (
+                        <div
+                          key={place.id}
+                          className="p-3.5 rounded-xl bg-white border border-[#dfccc7] shadow-card space-y-1.5 hover:border-[#c25e40]/50 transition-colors"
+                        >
+                          <div className="flex items-start justify-between gap-2 text-xs font-bold text-stone-900">
+                            <span className="leading-snug">{place.title}</span>
+                            <span className="shrink-0">{catInfo?.icon}</span>
+                          </div>
+                          {place.locationHint && (
+                            <p className="text-[11px] text-[#c25e40] font-semibold flex items-center gap-1">
+                              <MapPin className="w-3 h-3 shrink-0" /> {place.locationHint}
+                            </p>
+                          )}
+                          {place.notes && (
+                            <p className="text-[11px] text-stone-600 font-medium">📝 {place.notes}</p>
+                          )}
+                          {place.estimatedCost && (
+                            <span className="inline-block text-[10px] font-bold px-2 py-0.5 rounded bg-[#c25e40]/15 text-[#a84e32] border border-[#c25e40]/30">
+                              Cost: {place.estimatedCost}
+                            </span>
+                          )}
                         </div>
-                        {place.notes && (
-                          <p className="text-[11px] text-stone-600 font-medium">{place.notes}</p>
-                        )}
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
               </div>

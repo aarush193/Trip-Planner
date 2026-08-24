@@ -134,7 +134,7 @@ Analyze the image content and extract ALL identifiable travel places, attraction
 For each extracted place:
 - "title": Name of the place, landmark, venue, or spot.
 - "category": Must be one of ["sightseeing", "food", "activity", "stay", "culture", "shopping"].
-- "locationHint": City, district, or neighborhood mentioned in text or visible.
+- "locationHint": City, region, or country of the place. Always infer and include the city and country (e.g. "Agra, India" for Taj Mahal, "Paris, France" for Eiffel Tower), even if only the landmark is visible.
 - "rawDetectedText": Any visible text, sticker location tag, caption, or handle extracted from the image.
 - "notes": Useful tips or recommendations visible in the screenshot (e.g. "sunset spot", "book early").
 - "confidence": A score between 0.5 and 1.0 indicating confidence in identifying the place.
@@ -219,13 +219,24 @@ Return ONLY structured data matching the schema.`;
     return NextResponse.json(response);
   } catch (error) {
     console.error("Gemini Vision API Error:", error);
+    const errMessage = error instanceof Error ? error.message : String(error);
+    const isRateLimit =
+      errMessage.includes("429") ||
+      errMessage.includes("RESOURCE_EXHAUSTED") ||
+      errMessage.toLowerCase().includes("quota") ||
+      errMessage.toLowerCase().includes("rate limit");
+
+    const userFriendlyError = isRateLimit
+      ? "AI quota temporarily exceeded (Rate Limit). Please wait a few seconds before uploading again."
+      : errMessage || "Failed to analyze screenshot with Gemini Vision API";
+
     return NextResponse.json(
       {
         success: false,
         places: [],
-        error: error instanceof Error ? error.message : "Failed to analyze screenshot with Gemini Vision API",
+        error: userFriendlyError,
       },
-      { status: 500 }
+      { status: isRateLimit ? 429 : 500 }
     );
   }
 }
