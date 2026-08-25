@@ -1,13 +1,39 @@
 @import "tailwindcss";
 
 :root {
-  --background: #fbf9f5;
-  --foreground: #292524;
-  --card-bg: #ffffff;
-  --terracotta: #c25e40;
-  --terracotta-hover: #a84e32;
-  --sage: #4a6b5b;
-  --sand-border: #e7e0d6;
+  /* Warm cream/off-white foundation */
+  --background: #faf7f2;
+  --foreground: #212529;
+  --surface: #ffffff;
+  --surface-sand: #f4eee6;
+  --border-sand: #e6dfd5;
+
+  /* Ocean Teal / Turquoise Primary Accent */
+  --teal-50: #f0fdfa;
+  --teal-100: #ccfbf1;
+  --teal-200: #99f6e4;
+  --teal-500: #14b8a6;
+  --teal-600: #0d9488;
+  --teal-700: #0f766e;
+  --teal-800: #115e59;
+  --teal-900: #134e4a;
+
+  /* Coral / Sunset Orange Accents */
+  --coral-100: #ffe4e1;
+  --coral-400: #ff8577;
+  --coral-500: #ff6b5b;
+  --coral-600: #e05343;
+  --coral-700: #c24134;
+
+  /* Subtle Golden Yellow Accents */
+  --gold-100: #fef3c7;
+  --gold-400: #f59e0b;
+  --gold-500: #d97706;
+
+  /* Deep Tropical Green Contrast */
+  --tropical-900: #064e3b;
+  --tropical-800: #065f46;
+  --tropical-700: #047857;
 }
 
 @theme inline {
@@ -28,31 +54,85 @@ h1, h2, h3, h4, .font-display {
   font-family: var(--font-display), "Outfit", system-ui, sans-serif;
 }
 
-/* Smooth Scrolling & Smooth Transitions */
-* {
-  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-/* Custom Earth Tone Scrollbar */
+/* Custom Vacation / Travel Scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
 }
 ::-webkit-scrollbar-track {
-  background: transparent;
+  background: #f4eee6;
 }
 ::-webkit-scrollbar-thumb {
-  background: #d6ceb8;
+  background: #0d9488;
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #b8ac92;
+  background: #0f766e;
 }
 
-@keyframes fadeIn {
+/* Premium Card Lift & Glassmorphism Utilities */
+.glass-card {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(230, 223, 213, 0.8);
+}
+
+.card-hover {
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.card-hover:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 28px -4px rgba(13, 148, 136, 0.12), 0 4px 10px -2px rgba(33, 37, 41, 0.04);
+}
+
+.shadow-travel {
+  box-shadow: 0 8px 30px -4px rgba(13, 148, 136, 0.1), 0 2px 8px -1px rgba(33, 37, 41, 0.03);
+}
+
+.shadow-teal-glow {
+  box-shadow: 0 6px 20px -2px rgba(13, 148, 136, 0.25);
+}
+
+/* Animated Shimmer Skeleton for Gemini Processing */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.skeleton-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(244, 238, 230, 0.6) 25%,
+    rgba(255, 255, 255, 0.9) 50%,
+    rgba(244, 238, 230, 0.6) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.8s infinite linear;
+}
+
+/* Subtle Floating Parallax Animation for Decorative Botanical Elements */
+@keyframes floatSubtle {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-6px) rotate(1.5deg);
+  }
+}
+
+.animate-float {
+  animation: floatSubtle 5s ease-in-out infinite;
+}
+
+/* Entrance Animations */
+@keyframes slideUpFade {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(12px);
   }
   to {
     opacity: 1;
@@ -61,14 +141,15 @@ h1, h2, h3, h4, .font-display {
 }
 
 .animate-fade-in {
-  animation: fadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: slideUpFade 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
-/* Subtle Card Glow / Shadow Utilities */
-.shadow-earth {
-  box-shadow: 0 4px 20px -2px rgba(194, 94, 64, 0.08), 0 2px 6px -1px rgba(41, 37, 36, 0.04);
-}
-
-.shadow-card {
-  box-shadow: 0 2px 10px -1px rgba(41, 37, 36, 0.04), 0 1px 3px 0 rgba(41, 37, 36, 0.02);
+/* Respect user's motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

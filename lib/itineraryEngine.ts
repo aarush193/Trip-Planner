@@ -24,6 +24,28 @@ export function deduplicatePlaces(places: ExtractedPlace[]): ExtractedPlace[] {
 }
 
 /**
+ * Haversine formula to compute distance (in kilometers) between two geographic coordinates.
+ */
+function haversineDistance(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+): number {
+  const R = 6371; // Earth radius in km
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+/**
  * Maps place categories to preferred time slots in priority order.
  */
 function getPreferredSlots(category: string): Array<"morning" | "afternoon" | "evening"> {
@@ -43,7 +65,9 @@ function getPreferredSlots(category: string): Array<"morning" | "afternoon" | "e
 }
 
 /**
- * Generates an intelligent, deterministic day-by-day itinerary based ONLY on user's places.
+ * Generates an intelligent, geographic & category-aware day-by-day itinerary.
+ * Uses enriched latitude/longitude when available, falls back to locationHint/city,
+ * balances load evenly across trip days, and respects category slot preferences.
  */
 export function buildItinerary(
   places: ExtractedPlace[],
@@ -78,79 +102,119 @@ export function buildItinerary(
 
   if (activities.length === 0) return schedule;
 
-  // Group activities by locationHint if available
-  const locationGroups: Map<string, ExtractedPlace[]> = new Map();
-  activities.forEach((place) => {
-    const locKey = (place.locationHint || "general").toLowerCase().trim();
-    if (!locationGroups.has(locKey)) {
-      locationGroups.set(locKey, []);
+  // Sort activities into geographically-ordered sequence using nearest-neighbor route heuristic
+  const unvisited = [...activities];
+  const orderedActivities: ExtractedPlace[] = [];
+
+  // Start with the first place that has valid coordinates (or the first place in list)
+  let current =
+    unvisited.find(
+      (p) => typeof p.latitude === "number" && typeof p.longitude === "number"
+    ) || unvisited[0];
+
+  orderedActivities.push(current);
+  unvisited.splice(unvisited.indexOf(current), 1);
+
+  while (unvisited.length > 0) {
+    let nearestIndex = 0;
+    let minDistance = Infinity;
+
+    for (let i = 0; i < unvisited.length; i++) {
+      const candidate = unvisited[i];
+
+      if (
+        typeof current.latitude === "number" &&
+        typeof current.longitude === "number" &&
+        typeof candidate.latitude === "number" &&
+        typeof candidate.longitude === "number"
+      ) {
+        const dist = haversineDistance(
+          current.latitude,
+          current.longitude,
+          candidate.latitude,
+          candidate.longitude
+        );
+        if (dist < minDistance) {
+          minDistance = dist;
+          nearestIndex = i;
+        }
+      } else {
+        // Fallback: check matching city or locationHint
+        const currHint = (current.city || current.locationHint || "").toLowerCase().trim();
+        const candHint = (candidate.city || candidate.locationHint || "").toLowerCase().trim();
+
+        if (currHint && candHint && currHint === candHint) {
+          minDistance = 0.1;
+          nearestIndex = i;
+          break;
+        }
+      }
     }
-    locationGroups.get(locKey)!.push(place);
-  });
 
-  // Target places per day
-  const targetPerDay = Math.max(1, Math.ceil(activities.length / numDays));
+    current = unvisited[nearestIndex];
+    orderedActivities.push(current);
+    unvisited.splice(nearestIndex, 1);
+  }
 
-  // Helper to count places in a day
+  // Distribute ordered places across trip days to balance load evenly
+  const targetPerDay = Math.ceil(orderedActivities.length / numDays);
+
   const getDayCount = (dayNum: number) =>
     schedule[dayNum].morning.length +
     schedule[dayNum].afternoon.length +
     schedule[dayNum].evening.length;
 
-  // Track assigned place IDs
-  const assignedPlaceIds = new Set<string>();
+  for (const place of orderedActivities) {
+    // Select best day that has not exceeded targetPerDay places
+    let bestDay = 1;
+    let minCount = Infinity;
 
-  // Process location groups to keep nearby places together on the same day when possible
-  for (const [, groupPlaces] of locationGroups.entries()) {
-    for (const place of groupPlaces) {
-      if (assignedPlaceIds.has(place.id)) continue;
+    for (let d = 1; d <= numDays; d++) {
+      const count = getDayCount(d);
+      if (count < minCount && count < targetPerDay) {
+        minCount = count;
+        bestDay = d;
+      }
+    }
 
-      // Find best candidate day: has fewest places, preferred day <= numDays
-      let bestDay = 1;
-      let minCount = Infinity;
-
+    // Fallback if all days reached targetPerDay: pick day with absolute minimum count
+    if (minCount === Infinity) {
       for (let d = 1; d <= numDays; d++) {
         const count = getDayCount(d);
-        if (count < minCount && count < targetPerDay * 2) {
+        if (count < minCount) {
           minCount = count;
           bestDay = d;
         }
       }
+    }
 
-      // Slot preference order based on category
-      const slotPreferences = getPreferredSlots(place.category);
+    // Slot preference order based on place category
+    const slotPreferences = getPreferredSlots(place.category);
 
-      // Find available slot on bestDay
-      let assignedSlot: "morning" | "afternoon" | "evening" | null = null;
+    // Find open preferred slot on bestDay (prefer <= 2 items per slot first)
+    let assignedSlot: "morning" | "afternoon" | "evening" | null = null;
+    for (const slot of slotPreferences) {
+      if (schedule[bestDay][slot].length < 2) {
+        assignedSlot = slot;
+        break;
+      }
+    }
+
+    // Fallback slot search if preferred slots are full
+    if (!assignedSlot) {
       for (const slot of slotPreferences) {
-        if (schedule[bestDay][slot].length < 2) {
+        if (schedule[bestDay][slot].length < 4) {
           assignedSlot = slot;
           break;
         }
       }
-
-      // Fallback if preferred day is full: try any day with open slot
-      if (!assignedSlot) {
-        for (let d = 1; d <= numDays; d++) {
-          for (const slot of slotPreferences) {
-            if (schedule[d][slot].length < 3) {
-              bestDay = d;
-              assignedSlot = slot;
-              break;
-            }
-          }
-          if (assignedSlot) break;
-        }
-      }
-
-      // Fallback slot if all preferred slots have items
-      if (!assignedSlot) {
-        assignedSlot = "afternoon";
-      }
-
-      schedule[bestDay][assignedSlot].push(place);
-      assignedPlaceIds.add(place.id);
     }
+
+    if (!assignedSlot) {
+      assignedSlot = "afternoon";
+    }
+
+    schedule[bestDay][assignedSlot].push(place);
   }
 
   return schedule;

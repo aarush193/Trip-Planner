@@ -6,6 +6,8 @@ export type PlaceCategory =
   | "culture"
   | "shopping";
 
+export type EnrichmentStatus = "pending" | "enriched" | "failed";
+
 export interface ExtractedPlace {
   id: string;
   sourceImageId?: string;
@@ -17,6 +19,12 @@ export interface ExtractedPlace {
   rawDetectedText?: string;
   notes?: string;
   estimatedCost?: string;
+  canonicalName?: string;
+  city?: string;
+  address?: string;
+  latitude?: number;
+  longitude?: number;
+  enrichmentStatus?: EnrichmentStatus;
 }
 
 export interface UploadedScreenshot {
