@@ -85,22 +85,40 @@ const CATEGORY_CONFIG: Record<
 
 const SAMPLE_SCREENSHOTS = [
   {
-    name: "paris_reels_saved.jpg",
-    previewUrl: "https://images.unsplash.com/photo-1502602898657-3e91760cbb34?w=400&q=80",
+    name: "paris_sample.jpg",
+    previewUrl: "/samples/paris_sample.jpg",
     label: "Paris Saved Reels",
     defaultDestination: "Paris, France",
   },
   {
-    name: "taj_mahal_agra_photo.jpg",
-    previewUrl: "https://images.unsplash.com/photo-1564507592333-c60657eea523?w=400&q=80",
+    name: "agra_sample.jpg",
+    previewUrl: "/samples/agra_sample.jpg",
     label: "Taj Mahal & Agra",
     defaultDestination: "Agra, India",
   },
   {
-    name: "tokyo_spots_camera_roll.jpg",
-    previewUrl: "https://images.unsplash.com/photo-1540959733332-eab4deabeeaf?w=400&q=80",
+    name: "tokyo_sample.jpg",
+    previewUrl: "/samples/tokyo_sample.jpg",
     label: "Tokyo Travel Spots",
     defaultDestination: "Tokyo, Japan",
+  },
+  {
+    name: "rome_sample.jpg",
+    previewUrl: "/samples/rome_sample.jpg",
+    label: "Rome Colosseum & Heritage",
+    defaultDestination: "Rome, Italy",
+  },
+  {
+    name: "bali_sample.jpg",
+    previewUrl: "/samples/bali_sample.jpg",
+    label: "Bali Tropical Spots",
+    defaultDestination: "Bali, Indonesia",
+  },
+  {
+    name: "new_york_sample.jpg",
+    previewUrl: "/samples/new_york_sample.jpg",
+    label: "New York Times Square & Central Park",
+    defaultDestination: "New York, USA",
   },
 ];
 
@@ -109,36 +127,61 @@ const DESTINATION_CARDS = [
     name: "Paris",
     country: "France",
     label: "Paris, France",
-    imageUrl: "https://images.unsplash.com/photo-1502602898657-3e91760cbb34?w=600&q=80",
+    imageUrl: "/samples/paris_sample.jpg",
+    sampleFile: "/samples/paris_sample.jpg",
+    sampleName: "paris_sample.jpg",
+    sampleLabel: "Paris Saved Reels",
     tagline: "Eiffel Tower, Louvre & Cozy Cafés",
   },
   {
     name: "Agra",
     country: "India",
     label: "Agra, India",
-    imageUrl: "https://images.unsplash.com/photo-1564507592333-c60657eea523?w=600&q=80",
+    imageUrl: "/samples/agra_sample.jpg",
+    sampleFile: "/samples/agra_sample.jpg",
+    sampleName: "agra_sample.jpg",
+    sampleLabel: "Taj Mahal & Agra",
     tagline: "Taj Mahal, Agra Fort & Heritage",
   },
   {
     name: "Tokyo",
     country: "Japan",
     label: "Tokyo, Japan",
-    imageUrl: "https://images.unsplash.com/photo-1540959733332-eab4deabeeaf?w=600&q=80",
+    imageUrl: "/samples/tokyo_sample.jpg",
+    sampleFile: "/samples/tokyo_sample.jpg",
+    sampleName: "tokyo_sample.jpg",
+    sampleLabel: "Tokyo Travel Spots",
     tagline: "Shibuya Crossing, Temples & Ramen",
   },
   {
     name: "Rome",
     country: "Italy",
     label: "Rome, Italy",
-    imageUrl: "https://images.unsplash.com/photo-1552832230-c0197dd311b5?w=600&q=80",
+    imageUrl: "/samples/rome_sample.jpg",
+    sampleFile: "/samples/rome_sample.jpg",
+    sampleName: "rome_sample.jpg",
+    sampleLabel: "Rome Colosseum & Heritage",
     tagline: "Colosseum, Vatican & Gelato",
   },
   {
     name: "Bali",
     country: "Indonesia",
     label: "Bali, Indonesia",
-    imageUrl: "https://images.unsplash.com/photo-1537996194471-e657df975ab4?w=600&q=80",
+    imageUrl: "/samples/bali_sample.jpg",
+    sampleFile: "/samples/bali_sample.jpg",
+    sampleName: "bali_sample.jpg",
+    sampleLabel: "Bali Tropical Spots",
     tagline: "Tropical Beaches & Rice Terraces",
+  },
+  {
+    name: "New York",
+    country: "USA",
+    label: "New York, USA",
+    imageUrl: "/samples/new_york_sample.jpg",
+    sampleFile: "/samples/new_york_sample.jpg",
+    sampleName: "new_york_sample.jpg",
+    sampleLabel: "New York Times Square & Central Park",
+    tagline: "Times Square, Central Park & Broadway",
   },
 ];
 
@@ -159,7 +202,9 @@ export default function PlannerPage() {
   const [destSearchQuery, setDestSearchQuery] = useState<string>("");
   const [isDestDropdownOpen, setIsDestDropdownOpen] = useState<boolean>(false);
 
-  const [activeWorkflow, setActiveWorkflow] = useState<"upload" | "manual">("upload");
+  const [activeWorkflow, setActiveWorkflow] = useState<"ai" | "upload" | "manual">("ai");
+  const [aiPromptText, setAiPromptText] = useState<string>("");
+  const [isAiPlanning, setIsAiPlanning] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -172,6 +217,76 @@ export default function PlannerPage() {
 
   const [activeDay, setActiveDay] = useState<number>(1);
   const [formError, setFormError] = useState<string | null>(null);
+
+  const handleAiTripSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!aiPromptText.trim() || isProcessing || isAiPlanning) return;
+
+    const prompt = aiPromptText.trim();
+    setIsAiPlanning(true);
+    setIsProcessing(true);
+    setFormError(null);
+
+    const sourceTripId = activeTripId;
+
+    try {
+      const res = await fetch("/api/plan-trip-text", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Failed to process AI trip request.");
+      }
+
+      if (data.destination) {
+        handleSelectDestination(data.destination);
+      }
+
+      if (data.tripDays && data.tripDays > 0) {
+        const today = new Date();
+        const startIso = today.toISOString().split("T")[0];
+        const endDateObj = new Date(today);
+        endDateObj.setDate(today.getDate() + data.tripDays - 1);
+        const endIso = endDateObj.toISOString().split("T")[0];
+
+        updateActiveTrip({
+          startDate: startIso,
+          endDate: endIso,
+        });
+      }
+
+      const mockAiScreenshot: UploadedScreenshot = {
+        id: `ai-prompt-${Date.now()}`,
+        previewUrl: "https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=400&q=80",
+        name: `ai_request_${Date.now()}.txt`,
+        size: 1024,
+        uploadedAt: new Date(),
+        status: "completed",
+        extractedCount: data.places.length,
+      };
+
+      commitAnalysisResults(
+        sourceTripId,
+        [mockAiScreenshot],
+        data.places,
+        data.destination || destination
+      );
+
+      setAiPromptText("");
+      setFormError(`AI extracted ${data.places.length} place(s) and structured your trip schedule!`);
+      setTimeout(() => setFormError(null), 4500);
+    } catch (err: unknown) {
+      const rawMsg = err instanceof Error ? err.message : "Failed to process AI trip request";
+      setFormError(rawMsg);
+    } finally {
+      setIsAiPlanning(false);
+      setIsProcessing(false);
+    }
+  };
 
   const destination = activeTrip.destination;
   const startDate = activeTrip.startDate;
@@ -415,9 +530,9 @@ export default function PlannerPage() {
   };
 
   const dailySchedule = useMemo(() => {
-    if (isProcessing || !isItineraryGenerated) return {};
+    if (isProcessing || extractedPlaces.length === 0) return {};
     return buildItinerary(extractedPlaces, tripDaysCount);
-  }, [extractedPlaces, tripDaysCount, isProcessing, isItineraryGenerated]);
+  }, [extractedPlaces, tripDaysCount, isProcessing]);
 
   return (
     <div className="w-full min-h-screen bg-[#F2EBDD] text-[#111318]">
@@ -657,6 +772,80 @@ export default function PlannerPage() {
           </div>
         </div>
 
+        {/* Active Destination Setup Action Bar */}
+        {(() => {
+          const normDest = destination.toLowerCase().trim();
+          const activeCard =
+            DESTINATION_CARDS.find(
+              (c) =>
+                normDest === c.label.toLowerCase().trim() ||
+                normDest.includes(c.name.toLowerCase()) ||
+                c.label.toLowerCase().includes(normDest)
+            ) ||
+            (normDest.includes("york") || normDest.includes("nyc")
+              ? DESTINATION_CARDS.find((c) => c.name === "New York")
+              : undefined);
+
+          const targetLabel = activeCard ? activeCard.label : destination || "Unspecified Destination";
+          const targetName = activeCard ? activeCard.name : destination || "Selected City";
+          const sampleName = activeCard?.sampleName || "paris_sample.jpg";
+          const sampleUrl = activeCard?.sampleFile || "/samples/paris_sample.jpg";
+          const sampleLabel = activeCard?.sampleLabel || "Paris Saved Reels";
+
+          return (
+            <div className="p-5 rounded-2xl bg-[#F5EFE5] border-2 border-[#073B3A] space-y-3 shadow-xs">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div className="space-y-1 max-w-xl">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-black uppercase tracking-wider bg-[#073B3A] text-white px-2.5 py-0.5 rounded-md">
+                      ACTIVE SELECTION
+                    </span>
+                    <h4 className="font-display font-black text-base text-[#073B3A] flex items-center gap-1.5">
+                      <MapPin className="w-4 h-4 text-[#FF2D78]" />
+                      <span>{targetLabel}</span>
+                    </h4>
+                  </div>
+                  <p className="text-xs text-[#073B3A]/90 font-medium">
+                    Run our local sample screenshot through Gemini Vision & Nominatim geocoding, or start an empty trip for manual planning.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    disabled={isProcessing}
+                    onClick={() => {
+                      handleSelectDestination(targetLabel);
+                      handleAddSampleScreenshot({
+                        name: sampleName,
+                        previewUrl: sampleUrl,
+                        label: sampleLabel,
+                        defaultDestination: targetLabel,
+                      });
+                    }}
+                    className="px-5 py-2.5 rounded-xl bg-[#FF2D78] hover:bg-[#e02467] text-white text-xs font-black shadow-md glow-pink-shadow transition-all flex items-center gap-2 active:scale-95 disabled:opacity-50 cursor-pointer"
+                  >
+                    <Sparkles className="w-4 h-4 text-white animate-pulse" />
+                    <span>Use Sample Screenshot ({targetName})</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleSelectDestination(targetLabel);
+                      setFormError(null);
+                    }}
+                    className="px-4 py-2.5 rounded-xl bg-white hover:bg-stone-50 text-[#073B3A] text-xs font-extrabold border-2 border-[#073B3A] shadow-xs transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4 text-[#FF2D78]" />
+                    <span>Start Empty Trip</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
         {/* Dates Selection */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 bg-[#F5EFE5] p-5 rounded-2xl border-2 border-[#e2d9cc]">
           <div className="space-y-1.5">
@@ -712,8 +901,20 @@ export default function PlannerPage() {
           <div className="flex items-center p-1 bg-[#F5EFE5] rounded-xl text-xs font-black border border-[#e2d9cc]">
             <button
               type="button"
+              onClick={() => setActiveWorkflow("ai")}
+              className={`px-4 py-2 rounded-lg transition-all duration-200 flex items-center gap-1.5 cursor-pointer ${
+                activeWorkflow === "ai"
+                  ? "bg-[#FF2D78] text-white shadow-md"
+                  : "text-[#073B3A] hover:bg-white/60"
+              }`}
+            >
+              <Sparkles className="w-4 h-4" />
+              <span>AI Trip Request</span>
+            </button>
+            <button
+              type="button"
               onClick={() => setActiveWorkflow("upload")}
-              className={`px-4 py-2 rounded-lg transition-all duration-200 flex items-center gap-1.5 ${
+              className={`px-4 py-2 rounded-lg transition-all duration-200 flex items-center gap-1.5 cursor-pointer ${
                 activeWorkflow === "upload"
                   ? "bg-[#FF2D78] text-white shadow-md"
                   : "text-[#073B3A] hover:bg-white/60"
@@ -725,7 +926,7 @@ export default function PlannerPage() {
             <button
               type="button"
               onClick={() => setActiveWorkflow("manual")}
-              className={`px-4 py-2 rounded-lg transition-all duration-200 flex items-center gap-1.5 ${
+              className={`px-4 py-2 rounded-lg transition-all duration-200 flex items-center gap-1.5 cursor-pointer ${
                 activeWorkflow === "manual"
                   ? "bg-[#FF2D78] text-white shadow-md"
                   : "text-[#073B3A] hover:bg-white/60"
@@ -781,6 +982,85 @@ export default function PlannerPage() {
             })}
           </div>
         </div>
+
+        {/* Workflow AI: Natural-Language Request */}
+        {activeWorkflow === "ai" && (
+          <div className="p-6 rounded-3xl bg-[#073B3A] text-white space-y-4 shadow-xl border-2 border-emerald-700 animate-fade-in">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-[#19D3C5] animate-pulse" />
+                  <h3 className="font-display font-black text-lg text-white">
+                    AI Natural-Language Trip Prompt
+                  </h3>
+                </div>
+                <p className="text-xs text-emerald-100/90 font-medium">
+                  Type your travel ideas, desired attractions, trip length, and pace. Gemini 3.6 Flash extracts structured places into your itinerary.
+                </p>
+              </div>
+              <span className="text-[10px] font-black uppercase tracking-wider bg-[#19D3C5] text-[#073B3A] px-3 py-1 rounded-full shadow-xs">
+                STRICT STRUCTURED AI
+              </span>
+            </div>
+
+            <form onSubmit={handleAiTripSubmit} className="space-y-3">
+              <div className="relative">
+                <textarea
+                  rows={3}
+                  value={aiPromptText}
+                  onChange={(e) => setAiPromptText(e.target.value)}
+                  placeholder='e.g. "I’m going to Agra for 3 days. I want Taj Mahal, Agra Fort, Mehtab Bagh and good local food. Keep day 1 relaxed."'
+                  className="w-full p-4 rounded-2xl border-2 border-emerald-700 bg-[#052e2c] text-white text-xs font-semibold placeholder-emerald-300/50 focus:outline-none focus:border-[#19D3C5] focus:ring-2 focus:ring-[#FF2D78] shadow-inner resize-none"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setAiPromptText(
+                        "I’m going to Agra for 3 days. I want Taj Mahal, Agra Fort, Mehtab Bagh and good local food. Keep day 1 relaxed."
+                      )
+                    }
+                    className="text-[11px] font-extrabold px-3 py-1 rounded-lg bg-emerald-900/80 hover:bg-emerald-800 text-emerald-200 border border-emerald-700 transition-colors cursor-pointer"
+                  >
+                    💡 Sample: Agra 3-Day Trip
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setAiPromptText(
+                        "Heading to Tokyo for 4 days! Want Shibuya Crossing, Senso-ji Temple, Akihabara shopping, Tsukiji Fish Market ramen, and stay at Park Hyatt Tokyo."
+                      )
+                    }
+                    className="text-[11px] font-extrabold px-3 py-1 rounded-lg bg-emerald-900/80 hover:bg-emerald-800 text-emerald-200 border border-emerald-700 transition-colors cursor-pointer"
+                  >
+                    💡 Sample: Tokyo 4-Day Trip
+                  </button>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isProcessing || !aiPromptText.trim()}
+                  className="px-6 py-3 rounded-xl bg-[#FF2D78] hover:bg-[#e02467] text-white font-black text-xs shadow-md glow-pink-shadow transition-all flex items-center justify-center gap-2 shrink-0 active:scale-95 disabled:opacity-50 cursor-pointer"
+                >
+                  {isAiPlanning ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 text-white animate-spin" />
+                      <span>Extracting Places...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4 text-white" />
+                      <span>Plan with AI</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
 
         {/* Workflow A: Upload Screenshots */}
         {activeWorkflow === "upload" && (
@@ -1281,165 +1561,176 @@ export default function PlannerPage() {
           </div>
 
           {/* Daily Schedule Slots */}
-          <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <h3 className="font-display font-black text-xl text-[#073B3A]">
-                Day {activeDay} Schedule
-              </h3>
-              <span className="text-xs text-[#073B3A] font-bold bg-[#19D3C5] px-3 py-1 rounded-full border border-[#073B3A]/20">
-                Geographically Clustered Routes
-              </span>
-            </div>
+          {(() => {
+            const currentDaySchedule = dailySchedule[activeDay] || dailySchedule[1] || {
+              dayNumber: 1,
+              morning: [],
+              afternoon: [],
+              evening: [],
+              accommodations: [],
+            };
 
-            {dailySchedule[activeDay]?.accommodations &&
-              dailySchedule[activeDay].accommodations.length > 0 && (
-                <div className="p-4 rounded-2xl bg-purple-100 border-2 border-purple-400 flex items-center justify-between gap-3 text-xs text-purple-950 shadow-xs">
-                  <div className="flex items-center gap-2 font-bold">
-                    <Hotel className="w-5 h-5 text-purple-900 shrink-0" />
-                    <span>
-                      Recommended Hotel / Base:{" "}
-                      <strong className="font-black text-stone-900">
-                        {dailySchedule[activeDay].accommodations.map((acc) => acc.title).join(", ")}
-                      </strong>
-                    </span>
-                  </div>
-                  <span className="text-[10px] bg-purple-300 text-purple-950 px-2.5 py-1 rounded-md font-black shrink-0 border border-purple-500/40">
-                    ACCOMMODATION
+            return (
+              <div className="space-y-6">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-display font-black text-xl text-[#073B3A]">
+                    Day {activeDay} Schedule
+                  </h3>
+                  <span className="text-xs text-[#073B3A] font-bold bg-[#19D3C5] px-3 py-1 rounded-full border border-[#073B3A]/20">
+                    Geographically Clustered Routes
                   </span>
                 </div>
-              )}
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {/* Morning Slot */}
-              <div className="p-5 rounded-3xl bg-[#F5EFE5] border-2 border-amber-300 space-y-4 shadow-sm">
-                <div className="flex items-center gap-2 font-display font-black text-xs text-amber-950 border-b-2 border-amber-300 pb-2">
-                  <Clock className="w-4 h-4 text-amber-800" />
-                  <span>Morning (9:00 AM - 12:00 PM)</span>
-                </div>
-                {dailySchedule[activeDay]?.morning.length === 0 ? (
-                  <div className="py-8 px-3 text-center border-2 border-dashed border-amber-300 rounded-2xl bg-white/70 space-y-1">
-                    <Clock className="w-5 h-5 text-amber-800/40 mx-auto" />
-                    <p className="text-xs font-black text-stone-800">No saved spots for morning</p>
-                    <p className="text-[11px] text-stone-600 font-medium">Upload screenshot or add place manually</p>
+                {currentDaySchedule.accommodations && currentDaySchedule.accommodations.length > 0 && (
+                  <div className="p-4 rounded-2xl bg-purple-100 border-2 border-purple-400 flex items-center justify-between gap-3 text-xs text-purple-950 shadow-xs">
+                    <div className="flex items-center gap-2 font-bold">
+                      <Hotel className="w-5 h-5 text-purple-900 shrink-0" />
+                      <span>
+                        Recommended Hotel / Base:{" "}
+                        <strong className="font-black text-stone-900">
+                          {currentDaySchedule.accommodations.map((acc) => acc.title).join(", ")}
+                        </strong>
+                      </span>
+                    </div>
+                    <span className="text-[10px] bg-purple-300 text-purple-950 px-2.5 py-1 rounded-md font-black shrink-0 border border-purple-500/40">
+                      ACCOMMODATION
+                    </span>
                   </div>
-                ) : (
-                  dailySchedule[activeDay].morning.map((place) => {
-                    const catInfo = CATEGORY_CONFIG[place.category];
-                    return (
-                      <div
-                        key={place.id}
-                        className="p-4 rounded-2xl bg-white border-2 border-amber-300 shadow-xs space-y-2 hover:border-amber-500 transition-colors"
-                      >
-                        <div className="flex items-start justify-between gap-2 text-xs font-black text-[#073B3A]">
-                          <span className="leading-snug">{place.title}</span>
-                          <span className="shrink-0">{catInfo?.icon}</span>
-                        </div>
-                        {(place.city || place.locationHint) && (
-                          <p className="text-[11px] text-[#FF2D78] font-black flex items-center gap-1">
-                            <MapPin className="w-3.5 h-3.5 shrink-0" /> {place.city || place.locationHint}
-                          </p>
-                        )}
-                        {place.notes && (
-                          <p className="text-[11px] text-stone-700 font-medium">📝 {place.notes}</p>
-                        )}
-                        {place.estimatedCost && (
-                          <span className="inline-block text-[10px] font-black px-2.5 py-0.5 rounded bg-amber-200 text-amber-950 border border-amber-400">
-                            Cost: {place.estimatedCost}
-                          </span>
-                        )}
-                      </div>
-                    );
-                  })
                 )}
-              </div>
 
-              {/* Afternoon Slot */}
-              <div className="p-5 rounded-3xl bg-[#F5EFE5] border-2 border-emerald-300 space-y-4 shadow-sm">
-                <div className="flex items-center gap-2 font-display font-black text-xs text-emerald-950 border-b-2 border-emerald-300 pb-2">
-                  <Clock className="w-4 h-4 text-emerald-800" />
-                  <span>Afternoon (1:00 PM - 5:00 PM)</span>
-                </div>
-                {dailySchedule[activeDay]?.afternoon.length === 0 ? (
-                  <div className="py-8 px-3 text-center border-2 border-dashed border-emerald-300 rounded-2xl bg-white/70 space-y-1">
-                    <Clock className="w-5 h-5 text-emerald-800/40 mx-auto" />
-                    <p className="text-xs font-black text-stone-800">No saved spots for afternoon</p>
-                    <p className="text-[11px] text-stone-600 font-medium">Upload screenshot or add place manually</p>
-                  </div>
-                ) : (
-                  dailySchedule[activeDay].afternoon.map((place) => {
-                    const catInfo = CATEGORY_CONFIG[place.category];
-                    return (
-                      <div
-                        key={place.id}
-                        className="p-4 rounded-2xl bg-white border-2 border-emerald-300 shadow-xs space-y-2 hover:border-emerald-500 transition-colors"
-                      >
-                        <div className="flex items-start justify-between gap-2 text-xs font-black text-[#073B3A]">
-                          <span className="leading-snug">{place.title}</span>
-                          <span className="shrink-0">{catInfo?.icon}</span>
-                        </div>
-                        {(place.city || place.locationHint) && (
-                          <p className="text-[11px] text-[#073B3A] font-black flex items-center gap-1">
-                            <MapPin className="w-3.5 h-3.5 shrink-0" /> {place.city || place.locationHint}
-                          </p>
-                        )}
-                        {place.notes && (
-                          <p className="text-[11px] text-stone-700 font-medium">📝 {place.notes}</p>
-                        )}
-                        {place.estimatedCost && (
-                          <span className="inline-block text-[10px] font-black px-2.5 py-0.5 rounded bg-emerald-200 text-emerald-950 border border-emerald-400">
-                            Cost: {place.estimatedCost}
-                          </span>
-                        )}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  {/* Morning Slot */}
+                  <div className="p-5 rounded-3xl bg-[#F5EFE5] border-2 border-amber-300 space-y-4 shadow-sm">
+                    <div className="flex items-center gap-2 font-display font-black text-xs text-amber-950 border-b-2 border-amber-300 pb-2">
+                      <Clock className="w-4 h-4 text-amber-800" />
+                      <span>Morning (9:00 AM - 12:00 PM)</span>
+                    </div>
+                    {currentDaySchedule.morning.length === 0 ? (
+                      <div className="py-8 px-3 text-center border-2 border-dashed border-amber-300 rounded-2xl bg-white/70 space-y-1">
+                        <Clock className="w-5 h-5 text-amber-800/40 mx-auto" />
+                        <p className="text-xs font-black text-stone-800">No saved spots for morning</p>
+                        <p className="text-[11px] text-stone-600 font-medium">Upload screenshot or add place manually</p>
                       </div>
-                    );
-                  })
-                )}
-              </div>
+                    ) : (
+                      currentDaySchedule.morning.map((place) => {
+                        const catInfo = CATEGORY_CONFIG[place.category];
+                        return (
+                          <div
+                            key={place.id}
+                            className="p-4 rounded-2xl bg-white border-2 border-amber-300 shadow-xs space-y-2 hover:border-amber-500 transition-colors"
+                          >
+                            <div className="flex items-start justify-between gap-2 text-xs font-black text-[#073B3A]">
+                              <span className="leading-snug">{place.title}</span>
+                              <span className="shrink-0">{catInfo?.icon}</span>
+                            </div>
+                            {(place.city || place.locationHint) && (
+                              <p className="text-[11px] text-[#FF2D78] font-black flex items-center gap-1">
+                                <MapPin className="w-3.5 h-3.5 shrink-0" /> {place.city || place.locationHint}
+                              </p>
+                            )}
+                            {place.notes && (
+                              <p className="text-[11px] text-stone-700 font-medium">📝 {place.notes}</p>
+                            )}
+                            {place.estimatedCost && (
+                              <span className="inline-block text-[10px] font-black px-2.5 py-0.5 rounded bg-amber-200 text-amber-950 border border-amber-400">
+                                Cost: {place.estimatedCost}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
 
-              {/* Evening Slot */}
-              <div className="p-5 rounded-3xl bg-[#F5EFE5] border-2 border-rose-300 space-y-4 shadow-sm">
-                <div className="flex items-center gap-2 font-display font-black text-xs text-rose-950 border-b-2 border-rose-300 pb-2">
-                  <Clock className="w-4 h-4 text-[#FF2D78]" />
-                  <span>Evening (6:00 PM - 10:00 PM)</span>
-                </div>
-                {dailySchedule[activeDay]?.evening.length === 0 ? (
-                  <div className="py-8 px-3 text-center border-2 border-dashed border-rose-300 rounded-2xl bg-white/70 space-y-1">
-                    <Clock className="w-5 h-5 text-[#FF2D78]/40 mx-auto" />
-                    <p className="text-xs font-black text-stone-800">No saved spots for evening</p>
-                    <p className="text-[11px] text-stone-600 font-medium">Upload screenshot or add place manually</p>
-                  </div>
-                ) : (
-                  dailySchedule[activeDay].evening.map((place) => {
-                    const catInfo = CATEGORY_CONFIG[place.category];
-                    return (
-                      <div
-                        key={place.id}
-                        className="p-4 rounded-2xl bg-white border-2 border-rose-300 shadow-xs space-y-2 hover:border-[#FF2D78] transition-colors"
-                      >
-                        <div className="flex items-start justify-between gap-2 text-xs font-black text-[#073B3A]">
-                          <span className="leading-snug">{place.title}</span>
-                          <span className="shrink-0">{catInfo?.icon}</span>
-                        </div>
-                        {(place.city || place.locationHint) && (
-                          <p className="text-[11px] text-[#FF2D78] font-black flex items-center gap-1">
-                            <MapPin className="w-3.5 h-3.5 shrink-0" /> {place.city || place.locationHint}
-                          </p>
-                        )}
-                        {place.notes && (
-                          <p className="text-[11px] text-stone-700 font-medium">📝 {place.notes}</p>
-                        )}
-                        {place.estimatedCost && (
-                          <span className="inline-block text-[10px] font-black px-2.5 py-0.5 rounded bg-rose-200 text-rose-950 border border-rose-400">
-                            Cost: {place.estimatedCost}
-                          </span>
-                        )}
+                  {/* Afternoon Slot */}
+                  <div className="p-5 rounded-3xl bg-[#F5EFE5] border-2 border-emerald-300 space-y-4 shadow-sm">
+                    <div className="flex items-center gap-2 font-display font-black text-xs text-emerald-950 border-b-2 border-emerald-300 pb-2">
+                      <Clock className="w-4 h-4 text-emerald-800" />
+                      <span>Afternoon (1:00 PM - 5:00 PM)</span>
+                    </div>
+                    {currentDaySchedule.afternoon.length === 0 ? (
+                      <div className="py-8 px-3 text-center border-2 border-dashed border-emerald-300 rounded-2xl bg-white/70 space-y-1">
+                        <Clock className="w-5 h-5 text-emerald-800/40 mx-auto" />
+                        <p className="text-xs font-black text-stone-800">No saved spots for afternoon</p>
+                        <p className="text-[11px] text-stone-600 font-medium">Upload screenshot or add place manually</p>
                       </div>
-                    );
-                  })
-                )}
+                    ) : (
+                      currentDaySchedule.afternoon.map((place) => {
+                        const catInfo = CATEGORY_CONFIG[place.category];
+                        return (
+                          <div
+                            key={place.id}
+                            className="p-4 rounded-2xl bg-white border-2 border-emerald-300 shadow-xs space-y-2 hover:border-emerald-500 transition-colors"
+                          >
+                            <div className="flex items-start justify-between gap-2 text-xs font-black text-[#073B3A]">
+                              <span className="leading-snug">{place.title}</span>
+                              <span className="shrink-0">{catInfo?.icon}</span>
+                            </div>
+                            {(place.city || place.locationHint) && (
+                              <p className="text-[11px] text-[#073B3A] font-black flex items-center gap-1">
+                                <MapPin className="w-3.5 h-3.5 shrink-0" /> {place.city || place.locationHint}
+                              </p>
+                            )}
+                            {place.notes && (
+                              <p className="text-[11px] text-stone-700 font-medium">📝 {place.notes}</p>
+                            )}
+                            {place.estimatedCost && (
+                              <span className="inline-block text-[10px] font-black px-2.5 py-0.5 rounded bg-emerald-200 text-emerald-950 border border-emerald-400">
+                                Cost: {place.estimatedCost}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+
+                  {/* Evening Slot */}
+                  <div className="p-5 rounded-3xl bg-[#F5EFE5] border-2 border-rose-300 space-y-4 shadow-sm">
+                    <div className="flex items-center gap-2 font-display font-black text-xs text-rose-950 border-b-2 border-rose-300 pb-2">
+                      <Clock className="w-4 h-4 text-[#FF2D78]" />
+                      <span>Evening (6:00 PM - 10:00 PM)</span>
+                    </div>
+                    {currentDaySchedule.evening.length === 0 ? (
+                      <div className="py-8 px-3 text-center border-2 border-dashed border-rose-300 rounded-2xl bg-white/70 space-y-1">
+                        <Clock className="w-5 h-5 text-[#FF2D78]/40 mx-auto" />
+                        <p className="text-xs font-black text-stone-800">No saved spots for evening</p>
+                        <p className="text-[11px] text-stone-600 font-medium">Upload screenshot or add place manually</p>
+                      </div>
+                    ) : (
+                      currentDaySchedule.evening.map((place) => {
+                        const catInfo = CATEGORY_CONFIG[place.category];
+                        return (
+                          <div
+                            key={place.id}
+                            className="p-4 rounded-2xl bg-white border-2 border-rose-300 shadow-xs space-y-2 hover:border-[#FF2D78] transition-colors"
+                          >
+                            <div className="flex items-start justify-between gap-2 text-xs font-black text-[#073B3A]">
+                              <span className="leading-snug">{place.title}</span>
+                              <span className="shrink-0">{catInfo?.icon}</span>
+                            </div>
+                            {(place.city || place.locationHint) && (
+                              <p className="text-[11px] text-[#FF2D78] font-black flex items-center gap-1">
+                                <MapPin className="w-3.5 h-3.5 shrink-0" /> {place.city || place.locationHint}
+                              </p>
+                            )}
+                            {place.notes && (
+                              <p className="text-[11px] text-stone-700 font-medium">📝 {place.notes}</p>
+                            )}
+                            {place.estimatedCost && (
+                              <span className="inline-block text-[10px] font-black px-2.5 py-0.5 rounded bg-rose-200 text-rose-950 border border-rose-400">
+                                Cost: {place.estimatedCost}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
+            );
+          })()}
         </section>
       ) : null}
     </main>

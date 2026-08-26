@@ -145,6 +145,31 @@ export function TripProvider({ children }: { children: React.ReactNode }) {
       ) {
         return "Tokyo, Japan";
       }
+      if (
+        fullText.includes("rome") ||
+        fullText.includes("colosseum") ||
+        fullText.includes("vatican") ||
+        fullText.includes("italy")
+      ) {
+        return "Rome, Italy";
+      }
+      if (
+        fullText.includes("bali") ||
+        fullText.includes("ubud") ||
+        fullText.includes("denpasar") ||
+        fullText.includes("indonesia")
+      ) {
+        return "Bali, Indonesia";
+      }
+      if (
+        fullText.includes("new york") ||
+        fullText.includes("nyc") ||
+        fullText.includes("manhattan") ||
+        fullText.includes("times square") ||
+        fullText.includes("broadway")
+      ) {
+        return "New York, USA";
+      }
     }
 
     for (const place of places) {
@@ -225,6 +250,7 @@ export function TripProvider({ children }: { children: React.ReactNode }) {
               destination: updatedDest,
               screenshots: [...remainingScreenshots, ...completedScreenshots],
               extractedPlaces: deduplicatePlaces([...t.extractedPlaces, ...extractedPlaces]),
+              isItineraryGenerated: true,
             };
           }
 
@@ -241,7 +267,7 @@ export function TripProvider({ children }: { children: React.ReactNode }) {
         endDate: "2026-09-18",
         screenshots: completedScreenshots,
         extractedPlaces: deduplicatePlaces(extractedPlaces),
-        isItineraryGenerated: false,
+        isItineraryGenerated: true,
         createdAt: new Date(),
       };
 
