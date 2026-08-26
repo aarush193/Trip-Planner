@@ -74,15 +74,19 @@ export default function DestinationsPage() {
   };
 
   return (
-    <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
-      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#e6dfd5] pb-6">
+    <div className="w-full min-h-screen bg-[#EAF4EF] text-[#111318]">
+      <main className="max-w-[1520px] w-full mx-auto px-4 sm:px-6 lg:px-12 xl:px-16 2xl:px-20 py-8 space-y-8 contain-paint">
+      <div className="flex flex-wrap items-center justify-between gap-4 border-b-2 border-[#FFE5D9] pb-6">
         <div>
-          <h1 className="font-display font-extrabold text-3xl text-stone-900 flex items-center gap-2.5">
-            <Globe className="w-7 h-7 text-[#0d9488]" />
-            Explore Travel Destinations
-          </h1>
-          <p className="text-xs text-stone-600 font-medium mt-1">
-            Pick a destination to instantly initialize a vacation trip context in your planner
+          <div className="flex items-center gap-2">
+            <span className="stamp-badge stamp-turquoise">EDITORIAL CATALOG</span>
+            <h1 className="font-display font-black text-3xl text-[#073B3A] flex items-center gap-2.5">
+              <Globe className="w-7 h-7 text-[#FF2D78]" />
+              Explore Travel Destinations
+            </h1>
+          </div>
+          <p className="text-xs text-[#073B3A] font-semibold mt-1">
+            Pick a destination to initialize a trip context in your planner studio
           </p>
         </div>
 
@@ -92,9 +96,9 @@ export default function DestinationsPage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search destinations..."
-            className="w-full pl-9 pr-4 py-2.5 rounded-2xl border border-[#e6dfd5] bg-white text-xs font-bold focus:outline-none focus:ring-2 focus:ring-[#0d9488]"
+            className="w-full pl-9 pr-4 py-2.5 rounded-2xl border-2 border-[#FFE5D9] bg-white text-xs font-black text-[#073B3A] focus:outline-none focus:ring-2 focus:ring-[#FF2D78] shadow-xs"
           />
-          <Search className="w-4 h-4 text-[#0d9488] absolute left-3 top-3" />
+          <Search className="w-4 h-4 text-[#FF2D78] absolute left-3 top-3" />
         </div>
       </div>
 
@@ -102,40 +106,41 @@ export default function DestinationsPage() {
         {filtered.map((dest, idx) => (
           <div
             key={idx}
-            className="bg-white rounded-3xl overflow-hidden border border-[#e6dfd5] shadow-card card-hover flex flex-col justify-between"
+            className="bg-white rounded-3xl overflow-hidden border-2 border-[#FFE5D9] shadow-xl card-hover-magazine flex flex-col justify-between"
           >
-            <div className="h-44 w-full relative overflow-hidden bg-stone-900">
+            <div className="h-48 w-full relative overflow-hidden bg-stone-900">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={dest.imageUrl}
                 alt={dest.name}
                 className="w-full h-full object-cover opacity-90 transition-transform duration-500 hover:scale-105"
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-stone-950/80 via-transparent to-transparent" />
-              <span className="absolute top-3 right-3 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-white/20 text-white backdrop-blur-xs">
+              <div className="absolute inset-0 bg-gradient-to-t from-[#073B3A]/80 via-transparent to-transparent" />
+              <span className="absolute top-3 right-3 stamp-badge stamp-pink text-[9px] shadow-md">
                 {dest.category}
               </span>
               <div className="absolute bottom-3 left-3 text-white">
-                <p className="font-display font-extrabold text-lg leading-tight flex items-center gap-1">
-                  <MapPin className="w-4 h-4 text-[#ff6b5b]" /> {dest.name}
+                <p className="font-display font-black text-xl leading-tight flex items-center gap-1.5">
+                  <MapPin className="w-4 h-4 text-[#FF2D78]" /> {dest.name}
                 </p>
-                <p className="text-xs text-stone-200">{dest.country}</p>
+                <p className="text-xs text-stone-200 font-medium">{dest.country}</p>
               </div>
             </div>
 
             <div className="p-5 space-y-4 flex-1 flex flex-col justify-between">
-              <p className="text-xs text-stone-600 leading-relaxed font-normal">{dest.tagline}</p>
+              <p className="text-xs text-[#073B3A] leading-relaxed font-semibold">{dest.tagline}</p>
               <button
                 type="button"
                 onClick={() => handlePlanDestination(dest.label)}
-                className="w-full py-3 rounded-2xl bg-[#0d9488] hover:bg-[#0f766e] text-white font-extrabold text-xs shadow-travel transition-all flex items-center justify-center gap-1.5 active:scale-95"
+                className="w-full py-3 rounded-2xl bg-[#073B3A] hover:bg-[#FF2D78] text-white font-black text-xs shadow-md transition-all flex items-center justify-center gap-1.5 active:scale-95"
               >
-                <Sparkles className="w-4 h-4 text-amber-200" /> Plan Trip to {dest.name}
+                <Sparkles className="w-4 h-4 text-[#19D3C5]" /> Plan Trip to {dest.name}
               </button>
             </div>
           </div>
         ))}
       </div>
     </main>
+    </div>
   );
 }
