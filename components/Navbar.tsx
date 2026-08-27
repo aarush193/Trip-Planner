@@ -20,9 +20,6 @@ export function Navbar() {
     { href: "/destinations", label: "Destinations" },
     { href: "/about", label: "About" },
     { href: "/contact", label: "Contact" },
-    ...(user
-      ? []
-      : [{ href: "/login", label: "Sign In" }]),
   ];
 
   return (
