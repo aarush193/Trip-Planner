@@ -204,6 +204,7 @@ export default function PlannerPage() {
     handleCreateNewTrip,
     handleSelectDestination,
     commitAnalysisResults,
+    inferDestinationFromPlaces,
     movePlaceInSchedule,
     removePlaceFromSchedule,
     reorderPlaceInSlot,
@@ -481,14 +482,11 @@ export default function PlannerPage() {
     }));
 
     enrichPlace(newPlace).then((enriched) => {
-      setTrips((prevTrips) =>
-        prevTrips.map((t) => ({
-          ...t,
-          extractedPlaces: t.extractedPlaces.map((p) =>
-            p.id === enriched.id ? enriched : p
-          ),
-        }))
-      );
+      updateActiveTrip((prev) => ({
+        extractedPlaces: prev.extractedPlaces.map((p: ExtractedPlace) =>
+          p.id === enriched.id ? enriched : p
+        ),
+      }));
     });
 
     setManualTitle("");

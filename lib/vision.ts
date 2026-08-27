@@ -15,7 +15,7 @@ export interface ExtractedPlace {
   title: string;
   category: PlaceCategory;
   locationHint?: string;
-  confidence: number;
+  confidence?: number;
   rawDetectedText?: string;
   notes?: string;
   estimatedCost?: string;

@@ -1,3 +1,5 @@
+import { ExtractedPlace } from "@/lib/vision";
+
 export interface DaySchedule {
   dayNumber: number;
   morning: ExtractedPlace[];

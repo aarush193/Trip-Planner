@@ -369,7 +369,7 @@ const discoveredMix: ExtractedPlace[] = [
   { id: "d-a2", title: "Agra Fort", category: "culture", city: "Agra", locationHint: "Agra, India", latitude: 27.179, longitude: 78.021 },
 ];
 const rankedMathuraPool = expandAndRankPlacesPool(userMathura, discoveredMix, 2, "Mathura, India");
-const hasAgraInMathura = rankedMathuraPool.some((p) => (p.city || "").toLowerCase() === "agra");
+const hasAgraInMathura = rankedMathuraPool.some((p: ExtractedPlace) => (p.city || "").toLowerCase() === "agra");
 assert(!hasAgraInMathura, "Agra places must be excluded from a dedicated Mathura trip pool.");
 assert(rankedMathuraPool.length >= 3, "Mathura places must be retained in pool.");
 console.log("✅ Test 22 passed.");
@@ -384,7 +384,7 @@ const discoveredKamakuraMix: ExtractedPlace[] = [
   { id: "d-t2", title: "Shibuya Crossing", category: "activity", city: "Tokyo", locationHint: "Tokyo, Japan", latitude: 35.659, longitude: 139.7 },
 ];
 const rankedKamakuraPool = expandAndRankPlacesPool(userKamakura, discoveredKamakuraMix, 2, "Kamakura, Japan");
-const hasTokyoInKamakura = rankedKamakuraPool.some((p) => (p.city || "").toLowerCase() === "tokyo");
+const hasTokyoInKamakura = rankedKamakuraPool.some((p: ExtractedPlace) => (p.city || "").toLowerCase() === "tokyo");
 assert(!hasTokyoInKamakura, "Tokyo places must be excluded from a dedicated Kamakura trip pool.");
 assert(rankedKamakuraPool.length >= 3, "Kamakura places must be retained in pool.");
 console.log("✅ Test 23 passed.");
@@ -549,15 +549,15 @@ const initialSched = buildItinerary([
 assert(initialSched[1].morning.length > 0 || initialSched[1].afternoon.length > 0, "Places initialised.");
 
 // Manually move Spot 2 to Evening
-const spot2 = initialSched[1].morning.find((p) => p.id === "p2") || initialSched[1].afternoon.find((p) => p.id === "p2");
+const spot2 = initialSched[1].morning.find((p: ExtractedPlace) => p.id === "p2") || initialSched[1].afternoon.find((p: ExtractedPlace) => p.id === "p2");
 if (spot2) {
-  initialSched[1].morning = initialSched[1].morning.filter((p) => p.id !== "p2");
-  initialSched[1].afternoon = initialSched[1].afternoon.filter((p) => p.id !== "p2");
+  initialSched[1].morning = initialSched[1].morning.filter((p: ExtractedPlace) => p.id !== "p2");
+  initialSched[1].afternoon = initialSched[1].afternoon.filter((p: ExtractedPlace) => p.id !== "p2");
   initialSched[1].evening.push(spot2);
 }
 
 const updatedDay = recalculateDayMetrics(initialSched[1]);
-assert(updatedDay.evening.some((p) => p.id === "p2"), "Spot 2 successfully moved to Evening slot.");
+assert(updatedDay.evening.some((p: ExtractedPlace) => p.id === "p2"), "Spot 2 successfully moved to Evening slot.");
 assert(typeof updatedDay.totalDistanceKm === "number", "Distance metrics recalculated after manual move.");
 console.log("✅ Test 35 passed.");
 
