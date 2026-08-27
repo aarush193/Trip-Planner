@@ -18,6 +18,8 @@ export function Navbar() {
     { href: "/planner", label: "Trip Planner" },
     { href: "/trips", label: `My Trips (${trips.length})` },
     { href: "/destinations", label: "Destinations" },
+    { href: "/about", label: "About" },
+    { href: "/contact", label: "Contact" },
     ...(user
       ? []
       : [{ href: "/login", label: "Sign In" }]),

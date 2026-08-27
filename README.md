@@ -16,6 +16,18 @@
 
 ---
 
+## 🗺️ Application Routes
+
+- `/` — **Homepage**: Editorial showcase, vision features, and curated destinations.
+- `/planner` — **Trip Planner Studio**: Interactive camera-roll upload, text planning, dynamic place editor, and distance-optimized day schedules.
+- `/trips` — **My Saved Trips**: Saved passport archive, guest mode indicator, and trip management.
+- `/destinations` — **Destinations**: Explore global travel destinations with pre-filtered itinerary templates.
+- `/about` — **About**: The story behind TripPlanner, problem statement, and engine architecture.
+- `/contact` — **Contact & Feedback**: Interactive contact form and feedback submission.
+- `/login` — **Authentication**: Email + Password sign-in and account registration.
+
+---
+
 ## 🛠️ Tech Stack
 
 - **Framework**: Next.js 15 (App Router, Turbopack, React 19)
@@ -53,6 +65,9 @@ npm install
 
 # Start development server
 npm run dev
+
+# Production Build
+npm run build
 ```
 
 Open [http://localhost:3000](http://localhost:3000) in your browser.
