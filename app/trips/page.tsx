@@ -39,7 +39,7 @@ const DESTINATION_IMAGES: Record<string, string> = {
 const DEFAULT_COVER = "https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=600&q=80";
 
 export default function MyTripsPage() {
-  const { trips, activeTripId, setActiveTripId, handleCreateNewTrip, setTrips } = useTripContext();
+  const { trips, activeTripId, setActiveTripId, handleCreateNewTrip, setTrips, user, openAuthGate } = useTripContext();
   const router = useRouter();
 
   const [searchQuery, setSearchQuery] = useState<string>("");
@@ -53,10 +53,6 @@ export default function MyTripsPage() {
 
   const handleDeleteTrip = (tripId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (trips.length <= 1) {
-      alert("You must keep at least one active trip context in your journal.");
-      return;
-    }
     setTrips((prev) => prev.filter((t) => t.id !== tripId));
   };
 
@@ -167,6 +163,26 @@ export default function MyTripsPage() {
         </div>
       </section>
 
+      {!user && (
+        <section className="bg-[#FAF6EE] rounded-3xl border-2 border-[#E8DFC8] p-6 shadow-md flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <h3 className="font-display font-black text-lg text-[#073B3A] flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-[#FF2D78]" /> Currently Browsing in Guest Mode
+            </h3>
+            <p className="text-xs font-semibold text-[#073B3A]/80">
+              Sign in or create a free account to back up your itineraries and sync trips across all your devices.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => openAuthGate("my_trips")}
+            className="px-5 py-2.5 rounded-2xl bg-[#FF2D78] hover:bg-[#E02068] text-white font-black text-xs shadow-md transition-all shrink-0 active:scale-95"
+          >
+            Sign In to Sync Trips
+          </button>
+        </section>
+      )}
+
       {/* FILTER & SEARCH TOOLBAR */}
       <section className="bg-white rounded-3xl border-2 border-[#FFE5D9] p-6 shadow-lg flex flex-wrap items-center justify-between gap-4">
         <div className="relative flex-1 min-w-[240px] max-w-md">
@@ -223,7 +239,32 @@ export default function MyTripsPage() {
       </section>
 
       {/* SAVED TRIPS BOARDING PASS / POSTCARD CARDS GRID */}
-      {filteredTrips.length === 0 ? (
+      {trips.length === 0 ? (
+        <section className="py-16 text-center space-y-5 border-3 border-dashed border-[#073B3A]/20 rounded-[2.5rem] bg-[#FAF6EE] p-8 shadow-sm">
+          <div className="w-16 h-16 rounded-3xl bg-[#073B3A] text-white flex items-center justify-center mx-auto shadow-md">
+            <Luggage className="w-8 h-8 text-[#19D3C5]" />
+          </div>
+          <div className="space-y-2 max-w-md mx-auto">
+            <h3 className="font-display font-black text-2xl text-[#073B3A]">
+              Your Travel Journal is Empty
+            </h3>
+            <p className="text-xs text-[#073B3A]/80 font-semibold leading-relaxed">
+              You currently have 0 saved trips. Upload camera roll screenshots or select a city to generate your first custom day-by-day itinerary.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              handleCreateNewTrip();
+              router.push("/planner");
+            }}
+            className="px-8 py-3.5 rounded-full bg-[#FF2D78] hover:bg-[#E02068] text-white text-xs font-black shadow-lg glow-pink-shadow transition-all inline-flex items-center gap-2 active:scale-95"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Create Your First Trip</span>
+          </button>
+        </section>
+      ) : filteredTrips.length === 0 ? (
         <section className="py-16 text-center space-y-4 border-3 border-dashed border-[#FF6B5B]/30 rounded-3xl bg-[#FFE5D9]/30 p-8">
           <Luggage className="w-12 h-12 text-[#FF2D78] mx-auto" />
           <div className="space-y-1">

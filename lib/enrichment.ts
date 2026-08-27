@@ -4,7 +4,10 @@ import { EnrichPlaceResponse } from "@/app/api/enrich-place/route";
 /**
  * Calls the server-side /api/enrich-place endpoint to enrich a single place.
  */
-export async function enrichPlace(place: ExtractedPlace): Promise<ExtractedPlace> {
+export async function enrichPlace(
+  place: ExtractedPlace,
+  destination?: string
+): Promise<ExtractedPlace> {
   try {
     const response = await fetch("/api/enrich-place", {
       method: "POST",
@@ -14,6 +17,7 @@ export async function enrichPlace(place: ExtractedPlace): Promise<ExtractedPlace
       body: JSON.stringify({
         title: place.title,
         locationHint: place.locationHint,
+        destination: destination || place.locationHint || place.city,
       }),
     });
 
@@ -30,7 +34,7 @@ export async function enrichPlace(place: ExtractedPlace): Promise<ExtractedPlace
       return {
         ...place,
         canonicalName: data.enrichment.canonicalName,
-        city: data.enrichment.city,
+        city: data.enrichment.city || place.city,
         address: data.enrichment.address,
         latitude: data.enrichment.latitude,
         longitude: data.enrichment.longitude,
@@ -57,7 +61,8 @@ export async function enrichPlace(place: ExtractedPlace): Promise<ExtractedPlace
  */
 export async function enrichPlaces(
   places: ExtractedPlace[],
-  onPlaceEnriched?: (updatedPlace: ExtractedPlace) => void
+  onPlaceEnriched?: (updatedPlace: ExtractedPlace) => void,
+  destination?: string
 ): Promise<ExtractedPlace[]> {
   const enrichedList: ExtractedPlace[] = [];
 
@@ -68,7 +73,7 @@ export async function enrichPlaces(
       continue;
     }
 
-    const enriched = await enrichPlace(place);
+    const enriched = await enrichPlace(place, destination);
     enrichedList.push(enriched);
 
     if (onPlaceEnriched) {

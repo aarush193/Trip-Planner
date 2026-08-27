@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useMemo, useRef } from "react";
+import AddPlaceModal from "@/components/AddPlaceModal";
 import {
   Compass,
   MapPin,
@@ -39,6 +40,7 @@ import {
 } from "@/lib/vision";
 import { buildItinerary } from "@/lib/itineraryEngine";
 import { enrichPlace } from "@/lib/enrichment";
+import { discoverNearbyPlaces, expandAndRankPlacesPool } from "@/lib/discovery";
 import { useTripContext } from "@/context/TripContext";
 
 const CATEGORY_CONFIG: Record<
@@ -185,18 +187,30 @@ const DESTINATION_CARDS = [
   },
 ];
 
+import { useRouter } from "next/navigation";
+import { isSupabaseConfigured } from "@/lib/supabase";
+
 export default function PlannerPage() {
+  const router = useRouter();
   const {
     trips,
     activeTripId,
     activeTrip,
+    user,
+    isLoadingAuth,
+    handleSignOut,
     setActiveTripId,
-    setTrips,
     updateActiveTrip,
     handleCreateNewTrip,
     handleSelectDestination,
     commitAnalysisResults,
-    inferDestinationFromPlaces,
+    movePlaceInSchedule,
+    removePlaceFromSchedule,
+    reorderPlaceInSlot,
+    addPlaceToSchedule,
+    updateTripDuration,
+    openAuthGate,
+    handleSaveTripToCloud,
   } = useTripContext();
 
   const [destSearchQuery, setDestSearchQuery] = useState<string>("");
@@ -216,6 +230,7 @@ export default function PlannerPage() {
   const [manualCost, setManualCost] = useState<string>("");
 
   const [activeDay, setActiveDay] = useState<number>(1);
+  const [isAddPlaceModalOpen, setIsAddPlaceModalOpen] = useState<boolean>(false);
   const [formError, setFormError] = useState<string | null>(null);
 
   const handleAiTripSubmit = async (e?: React.FormEvent) => {
@@ -273,7 +288,8 @@ export default function PlannerPage() {
         sourceTripId,
         [mockAiScreenshot],
         data.places,
-        data.destination || destination
+        data.destination || destination,
+        data.tripDays
       );
 
       setAiPromptText("");
@@ -494,7 +510,7 @@ export default function PlannerPage() {
     }));
   };
 
-  const handleGenerateItinerary = () => {
+  const handleGenerateItinerary = async () => {
     if (isProcessing) return;
 
     let activeDest = destination.trim();
@@ -521,18 +537,50 @@ export default function PlannerPage() {
     }
 
     setFormError(null);
-    updateActiveTrip({ isItineraryGenerated: true });
-    setActiveDay(1);
+    setIsProcessing(true);
 
-    setTimeout(() => {
-      document.getElementById("itinerary-output")?.scrollIntoView({ behavior: "smooth" });
-    }, 150);
+    try {
+      // Check if place pool is sparse for the requested trip duration
+      let finalPlacesPool = extractedPlaces;
+      const minRequired = Math.max(3, tripDaysCount * 2.5);
+      if (extractedPlaces.length < minRequired) {
+        setFormError(`Discovering nearby attractions in ${activeDest} to build a full ${tripDaysCount}-day itinerary...`);
+        const discovered = await discoverNearbyPlaces(activeDest, extractedPlaces, tripDaysCount);
+        finalPlacesPool = expandAndRankPlacesPool(extractedPlaces, discovered, tripDaysCount, activeDest);
+
+        setFormError(`Discovered ${finalPlacesPool.length - extractedPlaces.length} nearby places in ${activeDest} for your ${tripDaysCount}-day trip!`);
+        setTimeout(() => setFormError(null), 4000);
+      }
+
+      const generatedSched = buildItinerary(finalPlacesPool, tripDaysCount, "normal", activeDest);
+
+      updateActiveTrip({
+        extractedPlaces: finalPlacesPool,
+        customSchedule: generatedSched,
+        isItineraryGenerated: true,
+      });
+
+      setActiveDay(1);
+
+      setTimeout(() => {
+        document.getElementById("itinerary-output")?.scrollIntoView({ behavior: "smooth" });
+      }, 150);
+    } catch (err) {
+      console.error("Discovery error:", err);
+      updateActiveTrip({ isItineraryGenerated: true });
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const dailySchedule = useMemo(() => {
-    if (isProcessing || extractedPlaces.length === 0) return {};
-    return buildItinerary(extractedPlaces, tripDaysCount);
-  }, [extractedPlaces, tripDaysCount, isProcessing]);
+    if (isProcessing) return {};
+    if (activeTrip.customSchedule && Object.keys(activeTrip.customSchedule).length > 0) {
+      return activeTrip.customSchedule;
+    }
+    if (extractedPlaces.length === 0) return {};
+    return buildItinerary(extractedPlaces, tripDaysCount, "normal", destination);
+  }, [extractedPlaces, tripDaysCount, isProcessing, destination, activeTrip.customSchedule]);
 
   return (
     <div className="w-full min-h-screen bg-[#F2EBDD] text-[#111318]">
@@ -580,6 +628,14 @@ export default function PlannerPage() {
                 {tripDaysCount > 0 && <span>{tripDaysCount} Days</span>}
               </div>
             </div>
+
+            <button
+              type="button"
+              onClick={() => handleSaveTripToCloud()}
+              className="w-full py-2 px-3 rounded-xl bg-[#FF2D78] hover:bg-[#E02068] text-white font-black text-xs shadow-md flex items-center justify-center gap-1.5 transition-all mt-2 active:scale-95"
+            >
+              <span>{user ? "☁️ Sync Trip to Cloud" : "🔒 Save Trip to Cloud"}</span>
+            </button>
           </div>
         </div>
       </section>
@@ -1523,23 +1579,67 @@ export default function PlannerPage() {
           <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#e2d9cc] pb-6">
             <div className="space-y-1">
               <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-black bg-[#19D3C5] text-[#073B3A] border border-[#073B3A]/30">
-                <Check className="w-4 h-4 text-[#073B3A]" /> ITINERARY GENERATED
+                <Check className="w-4 h-4 text-[#073B3A]" /> INTERACTIVE ITINERARY EDITOR
               </div>
               <h2 className="font-display text-3xl sm:text-4xl font-black text-[#073B3A] mt-1">
                 {destination || "Trip"} Day-by-Day Voyage Map
               </h2>
               <p className="text-xs text-[#073B3A] font-bold">
-                {startDate} to {endDate} &bull; {tripDaysCount} Days &bull; {extractedPlaces.length} Spots Clustered
+                {startDate} to {endDate} &bull; {tripDaysCount} Days &bull; {extractedPlaces.length} Spots Total
               </p>
             </div>
 
-            <button
-              type="button"
-              onClick={() => updateActiveTrip({ isItineraryGenerated: false })}
-              className="px-5 py-2.5 rounded-full text-xs font-black border-2 border-[#073B3A] hover:bg-[#F5EFE5] text-[#073B3A] transition-colors"
-            >
-              Close Itinerary View
-            </button>
+            <div className="flex items-center gap-3 flex-wrap">
+              {/* Add Place Button */}
+              <button
+                type="button"
+                onClick={() => setIsAddPlaceModalOpen(true)}
+                className="px-5 py-2.5 rounded-full text-xs font-black bg-[#073B3A] hover:bg-[#052b2a] text-white shadow-md transition-all flex items-center gap-1.5"
+              >
+                <span>+</span> Add Place
+              </button>
+
+              <button
+                type="button"
+                onClick={() => updateActiveTrip({ isItineraryGenerated: false })}
+                className="px-5 py-2.5 rounded-full text-xs font-black border-2 border-[#073B3A] hover:bg-[#F5EFE5] text-[#073B3A] transition-colors"
+              >
+                Close View
+              </button>
+            </div>
+          </div>
+
+          {/* Duration Adjuster & Controls Bar */}
+          <div className="p-4 rounded-2xl bg-[#F5EFE5] border-2 border-[#e2d9cc] flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <span className="text-xs font-black text-[#073B3A] uppercase tracking-wider">
+                Trip Duration:
+              </span>
+              <div className="flex items-center bg-white rounded-xl border border-[#e2d9cc] overflow-hidden shadow-xs">
+                <button
+                  type="button"
+                  disabled={tripDaysCount <= 1}
+                  onClick={() => updateTripDuration(tripDaysCount - 1)}
+                  className="px-3 py-1.5 hover:bg-[#F5EFE5] text-xs font-black text-[#073B3A] disabled:opacity-30 border-r border-[#e2d9cc]"
+                >
+                  -
+                </button>
+                <span className="px-4 py-1.5 text-xs font-black text-[#073B3A]">
+                  {tripDaysCount} {tripDaysCount === 1 ? "Day" : "Days"}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => updateTripDuration(tripDaysCount + 1)}
+                  className="px-3 py-1.5 hover:bg-[#F5EFE5] text-xs font-black text-[#073B3A] border-l border-[#e2d9cc]"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 text-xs font-bold text-stone-700">
+              <span>💡 Tip: Use the drop-down selectors on any card to move places between days or slots.</span>
+            </div>
           </div>
 
           {/* Day Tabs */}
@@ -1568,17 +1668,134 @@ export default function PlannerPage() {
               afternoon: [],
               evening: [],
               accommodations: [],
+              totalDistanceKm: 0,
+              totalTravelMinutes: 0,
+            };
+
+            const renderSlotPlaces = (
+              placesList: ExtractedPlace[],
+              slotName: "morning" | "afternoon" | "evening",
+              borderColor: string,
+              hoverBorderColor: string
+            ) => {
+              if (placesList.length === 0) {
+                return (
+                  <div className="py-8 px-3 text-center border-2 border-dashed border-[#e2d9cc] rounded-2xl bg-white/70 space-y-1">
+                    <Clock className="w-5 h-5 text-stone-400 mx-auto" />
+                    <p className="text-xs font-black text-stone-800">No places in {slotName}</p>
+                    <p className="text-[11px] text-stone-600 font-medium">Use "+ Add Place" or move a spot here</p>
+                  </div>
+                );
+              }
+
+              return placesList.map((place, idx) => {
+                const catInfo = CATEGORY_CONFIG[place.category];
+                return (
+                  <div
+                    key={place.id}
+                    className={`p-4 rounded-2xl bg-white border-2 ${borderColor} shadow-xs space-y-2.5 transition-all ${hoverBorderColor}`}
+                  >
+                    <div className="flex items-start justify-between gap-2 text-xs font-black text-[#073B3A]">
+                      <span className="leading-snug text-sm">{place.title}</span>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {/* Reorder Buttons */}
+                        {idx > 0 && (
+                          <button
+                            type="button"
+                            title="Move Up"
+                            onClick={() => reorderPlaceInSlot(activeDay, slotName, idx, idx - 1)}
+                            className="w-5 h-5 rounded bg-stone-100 hover:bg-stone-200 text-stone-700 font-black text-[10px] flex items-center justify-center"
+                          >
+                            ▲
+                          </button>
+                        )}
+                        {idx < placesList.length - 1 && (
+                          <button
+                            type="button"
+                            title="Move Down"
+                            onClick={() => reorderPlaceInSlot(activeDay, slotName, idx, idx + 1)}
+                            className="w-5 h-5 rounded bg-stone-100 hover:bg-stone-200 text-stone-700 font-black text-[10px] flex items-center justify-center"
+                          >
+                            ▼
+                          </button>
+                        )}
+                        {/* Remove Button */}
+                        <button
+                          type="button"
+                          title="Remove Place"
+                          onClick={() => removePlaceFromSchedule(activeDay, slotName, place.id)}
+                          className="w-6 h-6 rounded-full bg-rose-100 hover:bg-rose-200 text-rose-700 font-black text-xs flex items-center justify-center ml-1"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] border ${catInfo?.badgeClass}`}>
+                        {catInfo?.icon}
+                        <span>{catInfo?.label}</span>
+                      </span>
+                      {(place.city || place.locationHint) && (
+                        <p className="text-[11px] text-[#073B3A] font-bold flex items-center gap-1">
+                          <MapPin className="w-3 h-3 text-[#FF2D78] shrink-0" /> {place.city || place.locationHint}
+                        </p>
+                      )}
+                    </div>
+
+                    {place.notes && (
+                      <p className="text-[11px] text-stone-700 font-medium bg-amber-50 p-2 rounded-xl border border-amber-200">
+                        📝 {place.notes}
+                      </p>
+                    )}
+
+                    {/* Move Selector Dropdown */}
+                    <div className="pt-2 border-t border-stone-200 flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-black uppercase text-stone-700">Move Spot:</span>
+                      <select
+                        defaultValue=""
+                        onChange={(e) => {
+                          if (!e.target.value) return;
+                          const [tDayStr, tSlotStr] = e.target.value.split(":");
+                          movePlaceInSchedule(
+                            activeDay,
+                            slotName,
+                            parseInt(tDayStr, 10),
+                            tSlotStr as "morning" | "afternoon" | "evening",
+                            place.id
+                          );
+                          e.target.value = "";
+                        }}
+                        className="px-2 py-1 rounded-xl border border-stone-300 bg-stone-50 text-[11px] font-bold text-[#073B3A] focus:outline-none focus:ring-1 focus:ring-[#073B3A]"
+                      >
+                        <option value="" disabled>Change Slot / Day...</option>
+                        {Array.from({ length: Math.max(1, tripDaysCount) }, (_, i) => i + 1).map((d) => (
+                          <React.Fragment key={d}>
+                            <option value={`${d}:morning`}>Day {d} Morning 🌅</option>
+                            <option value={`${d}:afternoon`}>Day {d} Afternoon ☀️</option>
+                            <option value={`${d}:evening`}>Day {d} Evening 🌙</option>
+                          </React.Fragment>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                );
+              });
             };
 
             return (
               <div className="space-y-6">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between flex-wrap gap-2">
                   <h3 className="font-display font-black text-xl text-[#073B3A]">
                     Day {activeDay} Schedule
                   </h3>
-                  <span className="text-xs text-[#073B3A] font-bold bg-[#19D3C5] px-3 py-1 rounded-full border border-[#073B3A]/20">
-                    Geographically Clustered Routes
-                  </span>
+                  <div className="flex items-center gap-3">
+                    {typeof currentDaySchedule.totalDistanceKm === "number" && currentDaySchedule.totalDistanceKm > 0 && (
+                      <span className="text-xs font-black text-[#073B3A] bg-emerald-100 px-3 py-1 rounded-full border border-emerald-300">
+                        🚗 ~{currentDaySchedule.totalDistanceKm} km ({currentDaySchedule.totalTravelMinutes} mins travel)
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 {currentDaySchedule.accommodations && currentDaySchedule.accommodations.length > 0 && (
@@ -1601,131 +1818,44 @@ export default function PlannerPage() {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                   {/* Morning Slot */}
                   <div className="p-5 rounded-3xl bg-[#F5EFE5] border-2 border-amber-300 space-y-4 shadow-sm">
-                    <div className="flex items-center gap-2 font-display font-black text-xs text-amber-950 border-b-2 border-amber-300 pb-2">
-                      <Clock className="w-4 h-4 text-amber-800" />
-                      <span>Morning (9:00 AM - 12:00 PM)</span>
-                    </div>
-                    {currentDaySchedule.morning.length === 0 ? (
-                      <div className="py-8 px-3 text-center border-2 border-dashed border-amber-300 rounded-2xl bg-white/70 space-y-1">
-                        <Clock className="w-5 h-5 text-amber-800/40 mx-auto" />
-                        <p className="text-xs font-black text-stone-800">No saved spots for morning</p>
-                        <p className="text-[11px] text-stone-600 font-medium">Upload screenshot or add place manually</p>
+                    <div className="flex items-center justify-between font-display font-black text-xs text-amber-950 border-b-2 border-amber-300 pb-2">
+                      <div className="flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-amber-800" />
+                        <span>Morning (9:00 AM - 12:00 PM)</span>
                       </div>
-                    ) : (
-                      currentDaySchedule.morning.map((place) => {
-                        const catInfo = CATEGORY_CONFIG[place.category];
-                        return (
-                          <div
-                            key={place.id}
-                            className="p-4 rounded-2xl bg-white border-2 border-amber-300 shadow-xs space-y-2 hover:border-amber-500 transition-colors"
-                          >
-                            <div className="flex items-start justify-between gap-2 text-xs font-black text-[#073B3A]">
-                              <span className="leading-snug">{place.title}</span>
-                              <span className="shrink-0">{catInfo?.icon}</span>
-                            </div>
-                            {(place.city || place.locationHint) && (
-                              <p className="text-[11px] text-[#FF2D78] font-black flex items-center gap-1">
-                                <MapPin className="w-3.5 h-3.5 shrink-0" /> {place.city || place.locationHint}
-                              </p>
-                            )}
-                            {place.notes && (
-                              <p className="text-[11px] text-stone-700 font-medium">📝 {place.notes}</p>
-                            )}
-                            {place.estimatedCost && (
-                              <span className="inline-block text-[10px] font-black px-2.5 py-0.5 rounded bg-amber-200 text-amber-950 border border-amber-400">
-                                Cost: {place.estimatedCost}
-                              </span>
-                            )}
-                          </div>
-                        );
-                      })
-                    )}
+                      <span className="bg-amber-200 px-2 py-0.5 rounded text-[10px]">
+                        {currentDaySchedule.morning.length}
+                      </span>
+                    </div>
+                    {renderSlotPlaces(currentDaySchedule.morning, "morning", "border-amber-300", "hover:border-amber-500")}
                   </div>
 
                   {/* Afternoon Slot */}
                   <div className="p-5 rounded-3xl bg-[#F5EFE5] border-2 border-emerald-300 space-y-4 shadow-sm">
-                    <div className="flex items-center gap-2 font-display font-black text-xs text-emerald-950 border-b-2 border-emerald-300 pb-2">
-                      <Clock className="w-4 h-4 text-emerald-800" />
-                      <span>Afternoon (1:00 PM - 5:00 PM)</span>
-                    </div>
-                    {currentDaySchedule.afternoon.length === 0 ? (
-                      <div className="py-8 px-3 text-center border-2 border-dashed border-emerald-300 rounded-2xl bg-white/70 space-y-1">
-                        <Clock className="w-5 h-5 text-emerald-800/40 mx-auto" />
-                        <p className="text-xs font-black text-stone-800">No saved spots for afternoon</p>
-                        <p className="text-[11px] text-stone-600 font-medium">Upload screenshot or add place manually</p>
+                    <div className="flex items-center justify-between font-display font-black text-xs text-emerald-950 border-b-2 border-emerald-300 pb-2">
+                      <div className="flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-emerald-800" />
+                        <span>Afternoon (1:00 PM - 5:00 PM)</span>
                       </div>
-                    ) : (
-                      currentDaySchedule.afternoon.map((place) => {
-                        const catInfo = CATEGORY_CONFIG[place.category];
-                        return (
-                          <div
-                            key={place.id}
-                            className="p-4 rounded-2xl bg-white border-2 border-emerald-300 shadow-xs space-y-2 hover:border-emerald-500 transition-colors"
-                          >
-                            <div className="flex items-start justify-between gap-2 text-xs font-black text-[#073B3A]">
-                              <span className="leading-snug">{place.title}</span>
-                              <span className="shrink-0">{catInfo?.icon}</span>
-                            </div>
-                            {(place.city || place.locationHint) && (
-                              <p className="text-[11px] text-[#073B3A] font-black flex items-center gap-1">
-                                <MapPin className="w-3.5 h-3.5 shrink-0" /> {place.city || place.locationHint}
-                              </p>
-                            )}
-                            {place.notes && (
-                              <p className="text-[11px] text-stone-700 font-medium">📝 {place.notes}</p>
-                            )}
-                            {place.estimatedCost && (
-                              <span className="inline-block text-[10px] font-black px-2.5 py-0.5 rounded bg-emerald-200 text-emerald-950 border border-emerald-400">
-                                Cost: {place.estimatedCost}
-                              </span>
-                            )}
-                          </div>
-                        );
-                      })
-                    )}
+                      <span className="bg-emerald-200 px-2 py-0.5 rounded text-[10px]">
+                        {currentDaySchedule.afternoon.length}
+                      </span>
+                    </div>
+                    {renderSlotPlaces(currentDaySchedule.afternoon, "afternoon", "border-emerald-300", "hover:border-emerald-500")}
                   </div>
 
                   {/* Evening Slot */}
                   <div className="p-5 rounded-3xl bg-[#F5EFE5] border-2 border-rose-300 space-y-4 shadow-sm">
-                    <div className="flex items-center gap-2 font-display font-black text-xs text-rose-950 border-b-2 border-rose-300 pb-2">
-                      <Clock className="w-4 h-4 text-[#FF2D78]" />
-                      <span>Evening (6:00 PM - 10:00 PM)</span>
-                    </div>
-                    {currentDaySchedule.evening.length === 0 ? (
-                      <div className="py-8 px-3 text-center border-2 border-dashed border-rose-300 rounded-2xl bg-white/70 space-y-1">
-                        <Clock className="w-5 h-5 text-[#FF2D78]/40 mx-auto" />
-                        <p className="text-xs font-black text-stone-800">No saved spots for evening</p>
-                        <p className="text-[11px] text-stone-600 font-medium">Upload screenshot or add place manually</p>
+                    <div className="flex items-center justify-between font-display font-black text-xs text-rose-950 border-b-2 border-rose-300 pb-2">
+                      <div className="flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-[#FF2D78]" />
+                        <span>Evening (6:00 PM - 10:00 PM)</span>
                       </div>
-                    ) : (
-                      currentDaySchedule.evening.map((place) => {
-                        const catInfo = CATEGORY_CONFIG[place.category];
-                        return (
-                          <div
-                            key={place.id}
-                            className="p-4 rounded-2xl bg-white border-2 border-rose-300 shadow-xs space-y-2 hover:border-[#FF2D78] transition-colors"
-                          >
-                            <div className="flex items-start justify-between gap-2 text-xs font-black text-[#073B3A]">
-                              <span className="leading-snug">{place.title}</span>
-                              <span className="shrink-0">{catInfo?.icon}</span>
-                            </div>
-                            {(place.city || place.locationHint) && (
-                              <p className="text-[11px] text-[#FF2D78] font-black flex items-center gap-1">
-                                <MapPin className="w-3.5 h-3.5 shrink-0" /> {place.city || place.locationHint}
-                              </p>
-                            )}
-                            {place.notes && (
-                              <p className="text-[11px] text-stone-700 font-medium">📝 {place.notes}</p>
-                            )}
-                            {place.estimatedCost && (
-                              <span className="inline-block text-[10px] font-black px-2.5 py-0.5 rounded bg-rose-200 text-rose-950 border border-rose-400">
-                                Cost: {place.estimatedCost}
-                              </span>
-                            )}
-                          </div>
-                        );
-                      })
-                    )}
+                      <span className="bg-rose-200 px-2 py-0.5 rounded text-[10px]">
+                        {currentDaySchedule.evening.length}
+                      </span>
+                    </div>
+                    {renderSlotPlaces(currentDaySchedule.evening, "evening", "border-rose-300", "hover:border-rose-500")}
                   </div>
                 </div>
               </div>
@@ -1733,6 +1863,15 @@ export default function PlannerPage() {
           })()}
         </section>
       ) : null}
+
+      {/* Add Place Modal */}
+      <AddPlaceModal
+        isOpen={isAddPlaceModalOpen}
+        onClose={() => setIsAddPlaceModalOpen(false)}
+        totalDays={tripDaysCount}
+        activeDay={activeDay}
+        onAddPlace={addPlaceToSchedule}
+      />
     </main>
     </div>
   );

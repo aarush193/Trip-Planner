@@ -50,7 +50,7 @@ async function fetchNominatim(query: string): Promise<NominatimResult | null> {
 
   const response = await fetch(url, {
     headers: {
-      "User-Agent": "TripPlanner/1.0 (contact@tripplanner.app)",
+      "User-Agent": "TripPlanner/2.0 (contact@tripplanner.app)",
       "Accept-Language": "en-US,en;q=0.9",
     },
   });
@@ -67,10 +67,48 @@ async function fetchNominatim(query: string): Promise<NominatimResult | null> {
   return null;
 }
 
+/**
+ * Checks if a geocoded Nominatim result is geographically consistent with target destination.
+ * Generically rejects results that resolved to a completely different state/province or distant city.
+ */
+function isGeographicallyConsistent(result: NominatimResult, targetDestination?: string): boolean {
+  if (!targetDestination || !targetDestination.trim()) return true;
+
+  const targetClean = targetDestination.toLowerCase().trim();
+  const primaryTarget = targetClean.split(",")[0].trim().replace(/[^a-z0-9]/g, "");
+
+  if (!primaryTarget || primaryTarget.length < 3) return true;
+
+  const addr = result.address || {};
+  const resCity = (addr.city || addr.town || addr.village || addr.municipality || addr.county || "").toLowerCase().trim().replace(/[^a-z0-9]/g, "");
+  const resState = (addr.state || "").toLowerCase().trim().replace(/[^a-z0-9]/g, "");
+  const displayName = (result.display_name || "").toLowerCase().trim().replace(/[^a-z0-9]/g, "");
+
+  // If display_name or city contains primary target, it's consistent
+  if (displayName.includes(primaryTarget) || resCity.includes(primaryTarget) || primaryTarget.includes(resCity && resCity.length >= 3 ? resCity : "___none___")) {
+    return true;
+  }
+
+  // If target specified a state/country (e.g. "Mathura, Uttar Pradesh, India"), check if result state matches
+  const targetParts = targetClean.split(",").map((s) => s.trim().replace(/[^a-z0-9]/g, "")).filter((s) => s.length >= 3);
+  if (targetParts.length > 1 && resState) {
+    const stateMatches = targetParts.some((part) => resState.includes(part) || part.includes(resState));
+    if (stateMatches) return true;
+  }
+
+  // If result resolved to a distinct city in a completely different state, reject false match
+  if (resCity && resCity.length >= 3 && !resCity.includes(primaryTarget) && !primaryTarget.includes(resCity)) {
+    // Severe mismatch: candidate city does not match target city
+    return false;
+  }
+
+  return true;
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { title, locationHint } = body || {};
+    const { title, locationHint, destination } = body || {};
 
     if (!title || typeof title !== "string" || !title.trim()) {
       return NextResponse.json(
@@ -84,33 +122,55 @@ export async function POST(request: Request) {
     }
 
     const cleanTitle = title.trim();
-    const cleanHint =
-      typeof locationHint === "string" ? locationHint.trim() : "";
+    const cleanHint = typeof locationHint === "string" ? locationHint.trim() : "";
+    const cleanDest = typeof destination === "string" ? destination.trim() : "";
 
     let result: NominatimResult | null = null;
 
-    // Try combined query first if locationHint exists
-    if (cleanHint) {
+    // 1. Primary Query: Search title with explicit destination context to resolve ambiguous places accurately
+    const primaryQuery = cleanHint
+      ? `${cleanTitle}, ${cleanHint}`
+      : cleanDest
+      ? `${cleanTitle}, ${cleanDest}`
+      : cleanTitle;
+
+    try {
+      result = await fetchNominatim(primaryQuery);
+    } catch (err) {
+      console.warn(`Primary Nominatim search failed for "${primaryQuery}":`, err);
+    }
+
+    // 2. Secondary Query: Try title + target destination if primary query with locationHint gave no result
+    if (!result && cleanDest && primaryQuery !== `${cleanTitle}, ${cleanDest}`) {
       try {
-        result = await fetchNominatim(`${cleanTitle}, ${cleanHint}`);
+        result = await fetchNominatim(`${cleanTitle}, ${cleanDest}`);
       } catch (err) {
-        console.warn(
-          `Combined search failed for "${cleanTitle}, ${cleanHint}":`,
-          err
-        );
+        console.warn(`Secondary Nominatim search failed for "${cleanTitle}, ${cleanDest}":`, err);
       }
     }
 
-    // Fallback to title search if combined search returned no result
+    // 3. Fallback: Search clean title
     if (!result) {
       try {
         result = await fetchNominatim(cleanTitle);
       } catch (err) {
-        console.warn(`Title search failed for "${cleanTitle}":`, err);
+        console.warn(`Fallback title search failed for "${cleanTitle}":`, err);
       }
     }
 
     if (!result) {
+      return NextResponse.json({
+        success: true,
+        enrichment: {
+          enrichmentStatus: "failed",
+        },
+      });
+    }
+
+    // Validate geographic consistency against requested destination
+    const targetScope = cleanDest || cleanHint;
+    if (targetScope && !isGeographicallyConsistent(result, targetScope)) {
+      console.warn(`Rejecting false geocoding match "${result.display_name}" for place "${cleanTitle}" because it is outside requested scope "${targetScope}".`);
       return NextResponse.json({
         success: true,
         enrichment: {

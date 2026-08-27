@@ -18,7 +18,7 @@ import {
 import { useTripContext } from "@/context/TripContext";
 
 export default function HomePage() {
-  const { handleSelectDestination } = useTripContext();
+  const { handleSelectDestination, user, handleSignOut } = useTripContext();
 
   const featuredDestinations = [
     {
@@ -73,9 +73,30 @@ export default function HomePage() {
               AI-POWERED REEL TO TRIP ENGINE
             </span>
           </div>
-          <div className="flex items-center gap-1.5 text-xs font-black text-white bg-[#FF2D78] px-3 py-1 rounded-full shadow-xs">
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>SCREENSHOT → ITINERARY</span>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1.5 text-xs font-black text-white bg-[#FF2D78] px-3 py-1 rounded-full shadow-xs">
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>SCREENSHOT → ITINERARY</span>
+            </div>
+            {user ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-[#073B3A]">👤 {user.email}</span>
+                <button
+                  type="button"
+                  onClick={handleSignOut}
+                  className="text-xs font-black text-rose-700 hover:text-rose-900 border border-rose-300 px-2.5 py-0.5 rounded-full"
+                >
+                  Sign Out
+                </button>
+              </div>
+            ) : (
+              <Link
+                href="/login"
+                className="text-xs font-black text-white bg-[#073B3A] hover:bg-[#052e2c] px-3.5 py-1 rounded-full shadow-xs transition-colors"
+              >
+                Sign In
+              </Link>
+            )}
           </div>
         </div>
 

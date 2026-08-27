@@ -9,15 +9,18 @@ import { useTripContext } from "@/context/TripContext";
 export function Navbar() {
   const pathname = usePathname();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const { activeTrip, trips } = useTripContext();
+  const { activeTrip, trips, user, userProfile, handleSignOut } = useTripContext();
+
+  const displayName = userProfile?.display_name || user?.user_metadata?.full_name || user?.email?.split("@")[0] || "Voyageur";
 
   const navLinks = [
     { href: "/", label: "Home" },
     { href: "/planner", label: "Trip Planner" },
     { href: "/trips", label: `My Trips (${trips.length})` },
     { href: "/destinations", label: "Destinations" },
-    { href: "/about", label: "About" },
-    { href: "/contact", label: "Contact" },
+    ...(user
+      ? []
+      : [{ href: "/login", label: "Sign In" }]),
   ];
 
   return (
@@ -59,20 +62,28 @@ export function Navbar() {
           })}
         </nav>
 
-        {/* Right Active Trip Status & Planner CTA */}
-        <div className="hidden lg:flex items-center gap-3">
-          {activeTrip && activeTrip.destination && (
+        {/* Right User Profile / Auth & Planner CTA */}
+        <div className="hidden sm:flex items-center gap-3">
+          {user ? (
+            <div className="flex items-center gap-2 bg-[#052e2c] border border-emerald-700/60 p-1 pl-3 rounded-2xl">
+              <span className="text-xs font-black text-white flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-[#19D3C5]" />
+                {displayName}
+              </span>
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="px-3 py-1.5 rounded-xl bg-emerald-900/80 hover:bg-rose-900 text-xs font-black text-emerald-100 hover:text-white transition-colors border border-emerald-700/50"
+              >
+                Sign Out
+              </button>
+            </div>
+          ) : (
             <Link
-              href="/planner"
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#052e2c] border border-emerald-700/50 text-xs font-bold text-emerald-100 shadow-2xs hover:border-[#19D3C5] transition-colors"
+              href="/login"
+              className="px-4 py-2 rounded-2xl text-xs font-extrabold bg-[#052e2c] border border-emerald-700/50 text-white hover:border-[#19D3C5] transition-colors"
             >
-              <MapPin className="w-3.5 h-3.5 text-[#FF2D78]" />
-              <span className="max-w-[130px] truncate">{activeTrip.destination}</span>
-              {activeTrip.extractedPlaces.length > 0 && (
-                <span className="text-[10px] font-extrabold bg-[#19D3C5] text-[#073B3A] px-1.5 py-0.2 rounded-md">
-                  {activeTrip.extractedPlaces.length}
-                </span>
-              )}
+              Sign In
             </Link>
           )}
 
@@ -115,14 +126,30 @@ export function Navbar() {
               </Link>
             );
           })}
-          <div className="pt-2 border-t border-emerald-800/60">
-            <Link
-              href="/planner"
-              onClick={() => setIsMobileMenuOpen(false)}
-              className="w-full py-3 rounded-2xl bg-gradient-to-r from-[#FF2D78] to-[#FF6B5B] text-white font-extrabold text-xs flex items-center justify-center gap-2 shadow-md glow-pink-shadow"
-            >
-              <Sparkles className="w-4 h-4 text-white" /> Open Trip Planner
-            </Link>
+          <div className="pt-3 border-t border-emerald-800/60 flex items-center justify-between gap-2">
+            {user ? (
+              <>
+                <span className="text-xs font-bold text-emerald-100">👤 {displayName}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleSignOut();
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-rose-900 text-xs font-black text-white"
+                >
+                  Sign Out
+                </button>
+              </>
+            ) : (
+              <Link
+                href="/login"
+                onClick={() => setIsMobileMenuOpen(false)}
+                className="w-full py-2.5 rounded-xl bg-[#052e2c] border border-emerald-700 text-center text-xs font-extrabold text-white"
+              >
+                Sign In
+              </Link>
+            )}
           </div>
         </div>
       )}

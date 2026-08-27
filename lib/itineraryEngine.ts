@@ -1,11 +1,11 @@
-import { ExtractedPlace } from "./vision";
-
 export interface DaySchedule {
   dayNumber: number;
   morning: ExtractedPlace[];
   afternoon: ExtractedPlace[];
   evening: ExtractedPlace[];
   accommodations: ExtractedPlace[];
+  totalDistanceKm?: number;
+  totalTravelMinutes?: number;
 }
 
 export type TripSchedule = Record<number, DaySchedule>;
@@ -96,11 +96,11 @@ function clusterGeographicPlaces(
 
   // Step A: Select initial cluster centroids deterministically using Farthest-First Traversal
   const centroids: { lat: number; lng: number }[] = [];
-  
+
   // Seed 1: Place closest to geographic center of all points
   const avgLat = geoPlaces.reduce((sum, p) => sum + p.latitude!, 0) / geoPlaces.length;
   const avgLng = geoPlaces.reduce((sum, p) => sum + p.longitude!, 0) / geoPlaces.length;
-  
+
   let firstSeed = geoPlaces[0];
   let minDistToAvg = Infinity;
   for (const p of geoPlaces) {
@@ -135,7 +135,7 @@ function clusterGeographicPlaces(
 
   // Step B: K-Means Iteration (max 15 passes)
   const maxIterations = 15;
-  const targetPerCluster = Math.ceil(geoPlaces.length / kClusters);
+  const idealPerCluster = geoPlaces.length / kClusters;
 
   for (let iter = 0; iter < maxIterations; iter++) {
     for (let i = 0; i < kClusters; i++) {
@@ -155,7 +155,8 @@ function clusterGeographicPlaces(
           place.longitude!
         );
         const count = clusters.get(cIdx)!.length;
-        const capacityPenalty = count >= targetPerCluster ? (count - targetPerCluster + 1) * 3 : 0;
+        const minTarget = Math.floor(idealPerCluster);
+        const capacityPenalty = count >= minTarget ? (count - minTarget + 0.5) * 6 : 0;
         const adjustedDist = dist + capacityPenalty;
 
         if (adjustedDist < minDistance) {
@@ -240,14 +241,16 @@ function sequenceDayPlaces(places: ExtractedPlace[]): ExtractedPlace[] {
 
 /**
  * Internal scoring function to compute time-slot suitability.
- * Considers category preference, spatial sequence position, substantial attraction protection, and pace balancing.
+ * Considers category preference as a scoring factor (not hard rule), spatial sequence position,
+ * substantial attraction protection, and pace/slot load balancing.
  */
 function evaluateSlotScore(
   place: ExtractedPlace,
   slot: "morning" | "afternoon" | "evening",
   seqPos: number,
   currentSlotPlaces: ExtractedPlace[],
-  paceNorm: "relaxed" | "normal" | "packed" = "normal"
+  paceNorm: "relaxed" | "normal" | "packed" = "normal",
+  totalDayPlaces: number = 3
 ): number {
   const category = place.category;
   const currentSlotCount = currentSlotPlaces.length;
@@ -257,61 +260,77 @@ function evaluateSlotScore(
   switch (category) {
     case "sightseeing":
     case "culture":
-      if (slot === "morning") score += 6;
-      else if (slot === "afternoon") score += 3;
-      else if (slot === "evening") score += 0;
+      if (slot === "morning") score += 4.0;
+      else if (slot === "afternoon") score += 2.0;
+      else if (slot === "evening") score += 1.0;
       break;
     case "activity":
-      if (slot === "afternoon") score += 6;
-      else if (slot === "morning") score += 3;
-      else if (slot === "evening") score += 1;
+      if (slot === "afternoon") score += 4.0;
+      else if (slot === "morning") score += 1.5;
+      else if (slot === "evening") score += 1.0;
       break;
     case "shopping":
-      if (slot === "afternoon") score += 5;
-      else if (slot === "evening") score += 4;
-      else if (slot === "morning") score += 1;
+      if (slot === "afternoon") score += 3.5;
+      else if (slot === "evening") score += 2.5;
+      else if (slot === "morning") score += 1.0;
       break;
     case "food":
-      if (slot === "evening") score += 6;
-      else if (slot === "afternoon") score += 3;
-      else if (slot === "morning") score += 1;
+      if (slot === "evening") score += 4.5;
+      else if (slot === "afternoon") score += 2.0;
+      else if (slot === "morning") score += 0.5;
       break;
     default:
-      if (slot === "morning") score += 3;
-      else if (slot === "afternoon") score += 3;
-      else if (slot === "evening") score += 2;
+      if (slot === "morning") score += 2.0;
+      else if (slot === "afternoon") score += 2.0;
+      else if (slot === "evening") score += 2.0;
       break;
   }
 
   // 2. Spatial Sequence Alignment
   if (seqPos <= 0.35) {
-    if (slot === "morning") score += 3;
-    else if (slot === "afternoon") score += 1;
+    if (slot === "morning") score += 3.0;
+    else if (slot === "afternoon") score += 1.5;
+    else if (slot === "evening") score += 0.0;
   } else if (seqPos >= 0.65) {
-    if (slot === "evening") score += 3;
-    else if (slot === "afternoon") score += 1;
+    if (slot === "evening") score += 3.0;
+    else if (slot === "afternoon") score += 1.5;
+    else if (slot === "morning") score += 0.0;
   } else {
-    if (slot === "afternoon") score += 3;
-    else if (slot === "morning") score += 1;
-    else if (slot === "evening") score += 1;
+    if (slot === "afternoon") score += 2.5;
+    else if (slot === "morning") score += 1.5;
+    else if (slot === "evening") score += 1.5;
   }
 
-  // 3. Substantial Attraction Protection (avoid stacking multiple heavy sightseeing spots in 1 slot)
-  const hasSubstantial = currentSlotPlaces.some(
-    (p) => p.category === "sightseeing" || p.category === "culture"
-  );
-  if ((category === "sightseeing" || category === "culture") && hasSubstantial) {
-    score -= 5;
+  // 3. Substantial Attraction Protection
+  if (category === "sightseeing" || category === "culture") {
+    const substantialCount = currentSlotPlaces.filter(
+      (p) => p.category === "sightseeing" || p.category === "culture"
+    ).length;
+    score -= substantialCount * 3.0;
   }
 
-  // 4. Capacity & Pace Soft Penalty
-  const maxSoftLimit = paceNorm === "relaxed" ? 1 : paceNorm === "packed" ? 3 : 2;
+  // 4. Capacity & Empty Slot Load Balancing
   if (currentSlotCount === 0) {
-    score += 2;
-  } else if (currentSlotCount < maxSoftLimit) {
-    score -= 2;
+    if (totalDayPlaces >= 2) {
+      score += 4.5;
+    } else {
+      score += 1.5;
+    }
   } else {
-    score -= (currentSlotCount - maxSoftLimit + 1) * 6;
+    if (totalDayPlaces <= 3) {
+      score -= currentSlotCount * 4.0;
+    } else {
+      const targetPerSlot = Math.max(1, Math.ceil(totalDayPlaces / 3));
+      const softLimit =
+        paceNorm === "relaxed"
+          ? 1
+          : paceNorm === "packed"
+          ? Math.max(2, targetPerSlot + 1)
+          : targetPerSlot;
+      if (currentSlotCount >= softLimit) {
+        score -= (currentSlotCount - softLimit + 1) * 3.5;
+      }
+    }
   }
 
   return score;
@@ -323,17 +342,18 @@ function evaluateSlotScore(
  * Algorithm Highlights:
  * 1. Deterministic sorting & deduplication of input places.
  * 2. Accommodation isolation as daily hotel references.
- * 3. Pace awareness (relaxed / normal / packed).
+ * 3. Pace-aware daily capacity capping (relaxed: 3, normal: 5, packed: 7).
  * 4. K-Means / Medoid geographic day clustering for coordinate-equipped places.
  * 5. City/locationHint fallback distribution for non-coordinate places.
  * 6. Intra-day spatial route sequencing (nearest-neighbor TSP) to avoid backtracking.
- * 7. Realistic day structure (morning anchor -> afternoon activity -> evening food/relaxation).
- * 8. Guaranteed exact single assignment for every activity.
+ * 7. Realistic time-slot allocation (morning anchor -> afternoon activity -> evening food/relaxation).
+ * 8. Inter-place distance (km) and estimated travel time (minutes) calculations.
  */
 export function buildItinerary(
   places: ExtractedPlace[],
   totalDays: number,
-  pace?: "relaxed" | "normal" | "packed" | string
+  pace?: "relaxed" | "normal" | "packed" | string,
+  destinationName?: string
 ): TripSchedule {
   const numDays = Math.max(1, totalDays);
   const schedule: TripSchedule = {};
@@ -348,13 +368,25 @@ export function buildItinerary(
       afternoon: [],
       evening: [],
       accommodations: [],
+      totalDistanceKm: 0,
+      totalTravelMinutes: 0,
     };
   }
 
   if (!places || places.length === 0) return schedule;
 
+  // Filter input places to ensure destination boundary consistency if destinationName provided
+  let filteredPlaces = places;
+  if (destinationName && destinationName.trim()) {
+    const { evaluateDestinationRelevance } = require("./discovery");
+    const valid = places.filter((p) => evaluateDestinationRelevance(p, destinationName) > -10);
+    if (valid.length > 0) {
+      filteredPlaces = valid;
+    }
+  }
+
   // Step 1: Deterministic sorting before deduplication
-  const sortedRaw = [...places].sort((a, b) => {
+  const sortedRaw = [...filteredPlaces].sort((a, b) => {
     const titleA = (a.title || "").toLowerCase();
     const titleB = (b.title || "").toLowerCase();
     if (titleA < titleB) return -1;
@@ -377,6 +409,10 @@ export function buildItinerary(
 
   if (activities.length === 0) return schedule;
 
+  // Compute realistic max capacity per day based on pace limits
+  const maxDayCapacity =
+    paceNorm === "relaxed" ? 4 : paceNorm === "packed" ? 8 : 6;
+
   // Step 3: Partition activities into coordinate and non-coordinate groups
   const geoActivities = activities.filter(hasValidCoordinates);
   const nonGeoActivities = activities.filter((p) => !hasValidCoordinates(p));
@@ -386,10 +422,9 @@ export function buildItinerary(
     dayAssignments.set(d, []);
   }
 
-  // Determine active days needed (e.g. 1 activity for 3 days -> assign to Day 1, leave Days 2 & 3 clean)
   const activeDaysNeeded = Math.min(numDays, activities.length);
 
-  // Step 4: Geographic day clustering for coordinate-equipped places
+  // Step 4: Geographic day clustering for coordinate-equipped places with capacity cap
   if (geoActivities.length > 0) {
     const kClusters = Math.min(activeDaysNeeded, geoActivities.length);
     const clusterMap = clusterGeographicPlaces(geoActivities, kClusters);
@@ -397,7 +432,9 @@ export function buildItinerary(
     for (let cIdx = 0; cIdx < kClusters; cIdx++) {
       const targetDay = cIdx + 1;
       const assigned = clusterMap.get(cIdx) || [];
-      dayAssignments.get(targetDay)!.push(...assigned);
+      // Respect max daily capacity to avoid unrealistic overpacking
+      const cappedAssigned = assigned.slice(0, maxDayCapacity);
+      dayAssignments.get(targetDay)!.push(...cappedAssigned);
     }
   }
 
@@ -423,12 +460,14 @@ export function buildItinerary(
             minDay = d;
           }
         }
-        dayAssignments.get(minDay)!.push(place);
+        if (dayAssignments.get(minDay)!.length < maxDayCapacity) {
+          dayAssignments.get(minDay)!.push(place);
+        }
       }
     }
   }
 
-  // Step 6: For each day, sequence places spatially & assign time slots via internal scoring
+  // Step 6: For each day, sequence places spatially, assign time slots & calculate transit times
   for (let d = 1; d <= numDays; d++) {
     const dayPlaces = dayAssignments.get(d) || [];
     if (dayPlaces.length === 0) continue;
@@ -438,29 +477,150 @@ export function buildItinerary(
 
     for (let idx = 0; idx < totalRouteItems; idx++) {
       const place = sequencedRoute[idx];
-      const seqPos = totalRouteItems > 1 ? idx / (totalRouteItems - 1) : 0.5;
+      const seqPos = (idx + 0.5) / totalRouteItems;
 
       const morningPlaces = schedule[d].morning;
       const afternoonPlaces = schedule[d].afternoon;
       const eveningPlaces = schedule[d].evening;
 
-      const morningScore = evaluateSlotScore(place, "morning", seqPos, morningPlaces, paceNorm);
-      const afternoonScore = evaluateSlotScore(place, "afternoon", seqPos, afternoonPlaces, paceNorm);
-      const eveningScore = evaluateSlotScore(place, "evening", seqPos, eveningPlaces, paceNorm);
+      const morningScore = evaluateSlotScore(
+        place,
+        "morning",
+        seqPos,
+        morningPlaces,
+        paceNorm,
+        totalRouteItems
+      );
+      const afternoonScore = evaluateSlotScore(
+        place,
+        "afternoon",
+        seqPos,
+        afternoonPlaces,
+        paceNorm,
+        totalRouteItems
+      );
+      const eveningScore = evaluateSlotScore(
+        place,
+        "evening",
+        seqPos,
+        eveningPlaces,
+        paceNorm,
+        totalRouteItems
+      );
 
-      let chosenSlot: "morning" | "afternoon" | "evening" = "afternoon";
+      const category = place.category;
+      let chosenSlot: "morning" | "afternoon" | "evening" = "morning";
+      const maxScore = Math.max(morningScore, afternoonScore, eveningScore);
+      const eps = 0.001;
 
-      if (morningScore >= afternoonScore && morningScore >= eveningScore) {
+      if (Math.abs(morningScore - maxScore) < eps && (seqPos <= 0.4 || category === "sightseeing" || category === "culture")) {
         chosenSlot = "morning";
-      } else if (afternoonScore >= morningScore && afternoonScore >= eveningScore) {
+      } else if (Math.abs(eveningScore - maxScore) < eps && (seqPos >= 0.6 || category === "food")) {
+        chosenSlot = "evening";
+      } else if (Math.abs(afternoonScore - maxScore) < eps) {
         chosenSlot = "afternoon";
+      } else if (Math.abs(morningScore - maxScore) < eps) {
+        chosenSlot = "morning";
       } else {
         chosenSlot = "evening";
       }
 
       schedule[d][chosenSlot].push(place);
     }
+
+    // Calculate inter-place travel distance (km) and estimated transit minutes for the day
+    const dayOrderedPlaces = [
+      ...schedule[d].morning,
+      ...schedule[d].afternoon,
+      ...schedule[d].evening,
+    ];
+
+    let totalDist = 0;
+    let totalMins = 0;
+
+    for (let i = 0; i < dayOrderedPlaces.length - 1; i++) {
+      const p1 = dayOrderedPlaces[i];
+      const p2 = dayOrderedPlaces[i + 1];
+      if (hasValidCoordinates(p1) && hasValidCoordinates(p2)) {
+        const legDist = haversineDistance(p1.latitude!, p1.longitude!, p2.latitude!, p2.longitude!);
+        totalDist += legDist;
+        // Urban travel estimate ~25 km/h + 5 min buffer per hop
+        const legMins = Math.round((legDist / 25) * 60 + 5);
+        totalMins += legMins;
+      }
+    }
+
+    schedule[d].totalDistanceKm = Math.round(totalDist * 10) / 10;
+    schedule[d].totalTravelMinutes = totalMins;
   }
 
   return schedule;
 }
+
+/**
+ * Intelligent Itinerary Planner with automatic place discovery and expansion.
+ * If user-provided places are sparse (e.g. 1 place for a 4-day trip), discovers nearby authentic
+ * attractions/activities in the destination city to build a complete multi-day schedule.
+ */
+export async function planIntelligentItinerary(
+  places: ExtractedPlace[],
+  totalDays: number,
+  pace?: string,
+  destination?: string
+): Promise<TripSchedule> {
+  const numDays = Math.max(1, totalDays);
+  const targetCity =
+    destination ||
+    (places && places.length > 0
+      ? places[0].locationHint || places[0].city || places[0].title
+      : "Paris, France");
+
+  // Filter out any invalid cross-city places from input pool before scheduling
+  const { evaluateDestinationRelevance } = await import("./discovery");
+  const validPlaces = (places || []).filter((p) => evaluateDestinationRelevance(p, targetCity) > -10);
+  const placesToUse = validPlaces.length > 0 ? validPlaces : places || [];
+
+  const isSparse = !placesToUse || placesToUse.length < Math.max(2, numDays * 2.5);
+
+  if (isSparse) {
+    const { discoverNearbyPlaces, expandAndRankPlacesPool } = await import("./discovery");
+
+    const discovered = await discoverNearbyPlaces(targetCity, placesToUse, numDays);
+    const expandedPool = expandAndRankPlacesPool(placesToUse, discovered, numDays, targetCity);
+    return buildItinerary(expandedPool, numDays, pace, targetCity);
+  }
+
+  return buildItinerary(placesToUse, numDays, pace, targetCity);
+}
+
+/**
+ * Recalculates travel distance (km) and estimated minutes for a day schedule after manual edits.
+ */
+export function recalculateDayMetrics(day: DaySchedule): DaySchedule {
+  const dayOrderedPlaces = [
+    ...(day.morning || []),
+    ...(day.afternoon || []),
+    ...(day.evening || []),
+  ];
+
+  let totalDist = 0;
+  let totalMins = 0;
+
+  for (let i = 0; i < dayOrderedPlaces.length - 1; i++) {
+    const p1 = dayOrderedPlaces[i];
+    const p2 = dayOrderedPlaces[i + 1];
+    if (hasValidCoordinates(p1) && hasValidCoordinates(p2)) {
+      const legDist = haversineDistance(p1.latitude!, p1.longitude!, p2.latitude!, p2.longitude!);
+      totalDist += legDist;
+      const legMins = Math.round((legDist / 25) * 60 + 5);
+      totalMins += legMins;
+    }
+  }
+
+  return {
+    ...day,
+    totalDistanceKm: Math.round(totalDist * 10) / 10,
+    totalTravelMinutes: totalMins,
+  };
+}
+
