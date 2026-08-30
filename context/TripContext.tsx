@@ -6,7 +6,7 @@ import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 import { fetchUserTripsFromSupabase, saveTripToSupabase, deleteTripFromSupabase, fetchUserProfile, UserProfile } from "@/lib/supabaseService";
 import { ExtractedPlace, UploadedScreenshot } from "@/lib/vision";
 import { enrichPlaces } from "@/lib/enrichment";
-import { deduplicatePlaces, TripSchedule, DaySchedule, recalculateDayMetrics } from "@/lib/itineraryEngine";
+import { deduplicatePlaces, TripSchedule, DaySchedule, recalculateDayMetrics, buildItinerary } from "@/lib/itineraryEngine";
 import { AuthGateModal } from "@/components/AuthGateModal";
 
 export interface TripContext {
@@ -69,6 +69,12 @@ interface TripContextType {
     newPlace: ExtractedPlace
   ) => void;
   updateTripDuration: (newDays: number, newStartDate?: string) => void;
+  resetActiveTrip: () => void;
+  clearPlannerPlaces: () => void;
+  deleteTrip: (tripId: string) => Promise<void>;
+  deletePlaceFromTrip: (tripId: string, placeId: string) => void;
+  updatePlaceInTrip: (tripId: string, placeId: string, updates: Partial<ExtractedPlace>) => void;
+  clearPlacesFromTrip: (tripId: string) => void;
   isAuthGateModalOpen: boolean;
   authGateReason: "save_trip" | "my_trips" | null;
   openAuthGate: (reason?: "save_trip" | "my_trips") => void;
@@ -97,6 +103,33 @@ export function TripProvider({ children }: { children: React.ReactNode }) {
     setIsAuthGateModalOpen(false);
     setAuthGateReason(null);
   };
+
+  // Hydrate trips from localStorage on client mount (guest persistence)
+  useEffect(() => {
+    try {
+      const savedLocal = typeof window !== "undefined" ? localStorage.getItem("tripplanner_saved_trips") : null;
+      if (savedLocal) {
+        const parsed = JSON.parse(savedLocal);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setTrips((prev) => (prev.length === 0 ? parsed : prev));
+          setActiveTripId((prev) => (!prev ? parsed[0].id : prev));
+        }
+      }
+    } catch (e) {
+      console.warn("Could not load trips from localStorage:", e);
+    }
+  }, []);
+
+  // Sync trips to localStorage on state changes
+  useEffect(() => {
+    if (typeof window !== "undefined" && trips.length > 0) {
+      try {
+        localStorage.setItem("tripplanner_saved_trips", JSON.stringify(trips));
+      } catch (e) {
+        console.warn("Could not write trips to localStorage:", e);
+      }
+    }
+  }, [trips]);
 
   // Hydrate trips & profile from Supabase and listen to auth state changes
   useEffect(() => {
@@ -150,6 +183,11 @@ export function TripProvider({ children }: { children: React.ReactNode }) {
         // Reset trips on sign out
         setTrips([]);
         setActiveTripId("");
+        try {
+          if (typeof window !== "undefined") {
+            localStorage.removeItem("tripplanner_saved_trips");
+          }
+        } catch (e) {}
       }
     });
 
@@ -192,6 +230,15 @@ export function TripProvider({ children }: { children: React.ReactNode }) {
     return trips.find((t) => t.id === activeTripId) || trips[0];
   }, [trips, activeTripId, fallbackBlankTrip]);
 
+  // Debounced cloud sync only when user is authenticated
+  useEffect(() => {
+    if (!user || !activeTrip || !activeTrip.destination) return;
+    const timer = setTimeout(() => {
+      saveTripToSupabase(activeTrip, user.id);
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, [activeTrip, user]);
+
   const updateActiveTrip = (
     updates: Partial<TripContext> | ((prev: TripContext) => Partial<TripContext>)
   ) => {
@@ -204,30 +251,30 @@ export function TripProvider({ children }: { children: React.ReactNode }) {
         const patch = typeof updates === "function" ? updates(currentBase) : updates;
         const newTrip = { ...currentBase, ...patch, id: targetId };
         if (!activeTripId) setActiveTripId(targetId);
-        saveTripToSupabase(newTrip);
         return [...prevTrips, newTrip];
       }
 
       return prevTrips.map((t) => {
         if (t.id !== targetId) return t;
         const patch = typeof updates === "function" ? updates(t) : updates;
-        const updatedTrip = { ...t, ...patch };
-
-        // Sync asynchronously with Supabase
-        saveTripToSupabase(updatedTrip);
-
-        return updatedTrip;
+        return { ...t, ...patch };
       });
     });
   };
 
   const handleCreateNewTrip = () => {
     const newTripId = `trip-${Date.now()}`;
+    const today = new Date();
+    const startIso = today.toISOString().split("T")[0];
+    const endObj = new Date(today);
+    endObj.setDate(today.getDate() + 3);
+    const endIso = endObj.toISOString().split("T")[0];
+
     const newTrip: TripContext = {
       id: newTripId,
       destination: "",
-      startDate: "2026-09-15",
-      endDate: "2026-09-18",
+      startDate: startIso,
+      endDate: endIso,
       screenshots: [],
       extractedPlaces: [],
       isItineraryGenerated: false,
@@ -235,6 +282,7 @@ export function TripProvider({ children }: { children: React.ReactNode }) {
     };
     setTrips((prev) => [...prev, newTrip]);
     setActiveTripId(newTripId);
+    return newTripId;
   };
 
   const handleSelectDestination = (targetDest: string) => {
@@ -252,11 +300,17 @@ export function TripProvider({ children }: { children: React.ReactNode }) {
       updateActiveTrip({ destination: targetDest });
     } else {
       const newTripId = `trip-${Date.now()}`;
+      const today = new Date();
+      const startIso = today.toISOString().split("T")[0];
+      const endObj = new Date(today);
+      endObj.setDate(today.getDate() + 3);
+      const endIso = endObj.toISOString().split("T")[0];
+
       const newTrip: TripContext = {
         id: newTripId,
         destination: targetDest,
-        startDate: "2026-09-15",
-        endDate: "2026-09-18",
+        startDate: startIso,
+        endDate: endIso,
         screenshots: [],
         extractedPlaces: [],
         isItineraryGenerated: false,
@@ -545,14 +599,12 @@ export function TripProvider({ children }: { children: React.ReactNode }) {
       endDateObj.setDate(startDateObj.getDate() + daysCount - 1);
       const endIso = endDateObj.toISOString().split("T")[0];
 
+      // Rebuild and rebalance all places intelligently across the new duration
       let sched: TripSchedule = {};
-      if (prev.customSchedule && Object.keys(prev.customSchedule).length > 0) {
-        sched = JSON.parse(JSON.stringify(prev.customSchedule));
-      }
-
-      // If expanding days, create empty schedule for new days
-      for (let d = 1; d <= daysCount; d++) {
-        if (!sched[d]) {
+      if (prev.extractedPlaces && prev.extractedPlaces.length > 0) {
+        sched = buildItinerary(prev.extractedPlaces, daysCount, "normal", prev.destination);
+      } else {
+        for (let d = 1; d <= daysCount; d++) {
           sched[d] = {
             dayNumber: d,
             morning: [],
@@ -565,19 +617,206 @@ export function TripProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      // If contracting days, remove extra day keys
-      for (const dKey in sched) {
-        const dNum = parseInt(dKey, 10);
-        if (dNum > daysCount) {
-          delete sched[dNum];
-        }
-      }
-
       return {
         startDate: startIso,
         endDate: endIso,
         customSchedule: sched,
+        isItineraryGenerated: true,
       };
+    });
+  };
+
+  const clearPlannerPlaces = () => {
+    // Check if the active trip has saved places in the trips list
+    const existingIndex = trips.findIndex((t) => t.id === activeTripId);
+    const hasData =
+      existingIndex !== -1 &&
+      (trips[existingIndex].extractedPlaces.length > 0 ||
+        trips[existingIndex].destination.trim() !== "");
+
+    if (hasData) {
+      // Create a fresh new draft trip for the planner workspace so the saved trip in My Trips is untouched!
+      const newDraftId = `trip-draft-${Date.now()}`;
+      const newDraftTrip: TripContext = {
+        id: newDraftId,
+        destination: activeTrip.destination || "",
+        startDate: activeTrip.startDate,
+        endDate: activeTrip.endDate,
+        screenshots: [],
+        extractedPlaces: [],
+        customSchedule: undefined,
+        isItineraryGenerated: false,
+        createdAt: new Date(),
+      };
+      setTrips((prev) => [...prev, newDraftTrip]);
+      setActiveTripId(newDraftId);
+    } else {
+      updateActiveTrip(() => ({
+        extractedPlaces: [],
+        screenshots: [],
+        customSchedule: undefined,
+        isItineraryGenerated: false,
+      }));
+    }
+  };
+
+  const resetActiveTrip = () => {
+    const isSavedTripWithData = trips.some(
+      (t) => t.id === activeTripId && (t.extractedPlaces.length > 0 || t.destination.trim() !== "")
+    );
+
+    if (isSavedTripWithData) {
+      handleCreateNewTrip();
+    } else {
+      const today = new Date();
+      const startIso = today.toISOString().split("T")[0];
+      const endObj = new Date(today);
+      endObj.setDate(today.getDate() + 3);
+      const endIso = endObj.toISOString().split("T")[0];
+
+      updateActiveTrip(() => ({
+        destination: "",
+        extractedPlaces: [],
+        screenshots: [],
+        customSchedule: undefined,
+        isItineraryGenerated: false,
+        startDate: startIso,
+        endDate: endIso,
+      }));
+    }
+  };
+
+  const deleteTrip = async (tripId: string) => {
+    setTrips((prev) => {
+      const remaining = prev.filter((t) => t.id !== tripId);
+      if (typeof window !== "undefined") {
+        try {
+          localStorage.setItem("tripplanner_saved_trips", JSON.stringify(remaining));
+        } catch (e) {}
+      }
+      return remaining;
+    });
+
+    if (activeTripId === tripId) {
+      setActiveTripId("");
+    }
+
+    if (user) {
+      await deleteTripFromSupabase(tripId);
+    }
+  };
+
+  const deletePlaceFromTrip = (tripId: string, placeId: string) => {
+    setTrips((prevTrips) => {
+      return prevTrips.map((trip) => {
+        if (trip.id !== tripId) return trip;
+
+        const updatedPlaces = trip.extractedPlaces.filter((p) => p.id !== placeId);
+        let updatedSchedule = trip.customSchedule;
+
+        if (updatedSchedule) {
+          const newSched: TripSchedule = {};
+          for (const dKey in updatedSchedule) {
+            const dNum = parseInt(dKey, 10);
+            const dayObj = updatedSchedule[dNum];
+            if (!dayObj) continue;
+
+            const filteredMorning = dayObj.morning.filter((p) => p.id !== placeId);
+            const filteredAfternoon = dayObj.afternoon.filter((p) => p.id !== placeId);
+            const filteredEvening = dayObj.evening.filter((p) => p.id !== placeId);
+            const filteredAccommodations = (dayObj.accommodations || []).filter((p) => p.id !== placeId);
+
+            newSched[dNum] = recalculateDayMetrics({
+              ...dayObj,
+              morning: filteredMorning,
+              afternoon: filteredAfternoon,
+              evening: filteredEvening,
+              accommodations: filteredAccommodations,
+            });
+          }
+          updatedSchedule = newSched;
+        }
+
+        const updatedTrip: TripContext = {
+          ...trip,
+          extractedPlaces: updatedPlaces,
+          customSchedule: updatedSchedule,
+          isItineraryGenerated: updatedPlaces.length > 0 && trip.isItineraryGenerated,
+        };
+
+        if (user) {
+          saveTripToSupabase(updatedTrip, user.id);
+        }
+
+        return updatedTrip;
+      });
+    });
+  };
+
+  const updatePlaceInTrip = (tripId: string, placeId: string, updates: Partial<ExtractedPlace>) => {
+    setTrips((prevTrips) => {
+      return prevTrips.map((trip) => {
+        if (trip.id !== tripId) return trip;
+
+        const updatedPlaces = trip.extractedPlaces.map((p) =>
+          p.id === placeId ? { ...p, ...updates } : p
+        );
+
+        let updatedSchedule = trip.customSchedule;
+        if (updatedSchedule) {
+          const newSched: TripSchedule = {};
+          for (const dKey in updatedSchedule) {
+            const dNum = parseInt(dKey, 10);
+            const dayObj = updatedSchedule[dNum];
+            if (!dayObj) continue;
+
+            const updateSlotList = (list: ExtractedPlace[]) =>
+              list.map((p) => (p.id === placeId ? { ...p, ...updates } : p));
+
+            newSched[dNum] = {
+              ...dayObj,
+              morning: updateSlotList(dayObj.morning),
+              afternoon: updateSlotList(dayObj.afternoon),
+              evening: updateSlotList(dayObj.evening),
+              accommodations: updateSlotList(dayObj.accommodations || []),
+            };
+          }
+          updatedSchedule = newSched;
+        }
+
+        const updatedTrip: TripContext = {
+          ...trip,
+          extractedPlaces: updatedPlaces,
+          customSchedule: updatedSchedule,
+        };
+
+        if (user) {
+          saveTripToSupabase(updatedTrip, user.id);
+        }
+
+        return updatedTrip;
+      });
+    });
+  };
+
+  const clearPlacesFromTrip = (tripId: string) => {
+    setTrips((prevTrips) => {
+      return prevTrips.map((trip) => {
+        if (trip.id !== tripId) return trip;
+
+        const updatedTrip: TripContext = {
+          ...trip,
+          extractedPlaces: [],
+          customSchedule: undefined,
+          isItineraryGenerated: false,
+        };
+
+        if (user) {
+          saveTripToSupabase(updatedTrip, user.id);
+        }
+
+        return updatedTrip;
+      });
     });
   };
 
@@ -598,12 +837,18 @@ export function TripProvider({ children }: { children: React.ReactNode }) {
         handleCreateNewTrip,
         handleSelectDestination,
         commitAnalysisResults,
-                inferDestinationFromPlaces,
+        inferDestinationFromPlaces,
         movePlaceInSchedule,
         removePlaceFromSchedule,
         reorderPlaceInSlot,
         addPlaceToSchedule,
         updateTripDuration,
+        resetActiveTrip,
+        clearPlannerPlaces,
+        deleteTrip,
+        deletePlaceFromTrip,
+        updatePlaceInTrip,
+        clearPlacesFromTrip,
         isAuthGateModalOpen,
         authGateReason,
         openAuthGate,

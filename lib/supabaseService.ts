@@ -155,6 +155,11 @@ export async function saveTripToSupabase(trip: TripContext, userId?: string): Pr
       targetUserId = authData?.user?.id;
     }
 
+    if (!targetUserId) {
+      // Guest mode - skip cloud DB persistence to prevent unauthenticated network loops
+      return false;
+    }
+
     // 1. Upsert trip record
     const tripPayload: Record<string, unknown> = {
       id: dbTripId,
@@ -163,11 +168,8 @@ export async function saveTripToSupabase(trip: TripContext, userId?: string): Pr
       end_date: trip.endDate,
       is_itinerary_generated: trip.isItineraryGenerated,
       updated_at: new Date().toISOString(),
+      user_id: targetUserId,
     };
-
-    if (targetUserId) {
-      tripPayload.user_id = targetUserId;
-    }
 
     const { error: tripError } = await supabase
       .from("trips")
@@ -178,8 +180,17 @@ export async function saveTripToSupabase(trip: TripContext, userId?: string): Pr
       return false;
     }
 
-    // 2. Upsert places
-    if (trip.extractedPlaces && trip.extractedPlaces.length > 0) {
+    // 2. Sync places (upsert active ones and delete removed ones)
+    if (!trip.extractedPlaces || trip.extractedPlaces.length === 0) {
+      await supabase.from("itinerary_items").delete().eq("trip_id", dbTripId);
+      await supabase.from("places").delete().eq("trip_id", dbTripId);
+    } else {
+      const placeIds = trip.extractedPlaces.map((p) => ensureValidUuid(p.id));
+      const filterList = `(${placeIds.map((id) => `"${id}"`).join(",")})`;
+      
+      // Delete places belonging to this trip that were removed
+      await supabase.from("places").delete().eq("trip_id", dbTripId).not("id", "in", filterList);
+
       const placesPayload = trip.extractedPlaces.map((p) => ({
         id: ensureValidUuid(p.id),
         trip_id: dbTripId,
@@ -201,10 +212,9 @@ export async function saveTripToSupabase(trip: TripContext, userId?: string): Pr
     }
 
     // 3. Sync itinerary items if customSchedule exists
-    if (trip.customSchedule) {
-      // Clear existing items for clean sync
-      await supabase.from("itinerary_items").delete().eq("trip_id", dbTripId);
+    await supabase.from("itinerary_items").delete().eq("trip_id", dbTripId);
 
+    if (trip.customSchedule && Object.keys(trip.customSchedule).length > 0) {
       const itemsPayload: Record<string, unknown>[] = [];
 
       for (const dKey in trip.customSchedule) {

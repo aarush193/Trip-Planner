@@ -10,7 +10,9 @@ export interface DaySchedule {
   totalTravelMinutes?: number;
 }
 
-export type TripSchedule = Record<number, DaySchedule>;
+export type TripSchedule = Record<number, DaySchedule> & {
+  unassignedPlaces?: ExtractedPlace[];
+};
 
 /**
  * Deduplicates places based on normalized title or ID.
@@ -61,7 +63,7 @@ export function haversineDistance(
 /**
  * Checks if a place has valid numeric latitude & longitude coordinates.
  */
-function hasValidCoordinates(place: ExtractedPlace): boolean {
+export function hasValidCoordinates(place: ExtractedPlace): boolean {
   return (
     typeof place.latitude === "number" &&
     typeof place.longitude === "number" &&
@@ -75,8 +77,26 @@ function hasValidCoordinates(place: ExtractedPlace): boolean {
 }
 
 /**
+ * Estimates realistic transit minutes between two locations based on distance:
+ * - Walking (<= 1.2 km): ~4.8 km/h (12.5 min/km)
+ * - Urban transit / cab (1.2 km - 12 km): ~22 km/h + 4 min buffer
+ * - Regional driving / rail (> 12 km): ~50 km/h + 8 min buffer
+ */
+export function estimateLegTravelMinutes(distKm: number): number {
+  if (distKm <= 0.05) return 0;
+  if (distKm <= 1.2) {
+    return Math.max(1, Math.round(distKm * 12.5));
+  } else if (distKm <= 12) {
+    return Math.round((distKm / 22) * 60 + 4);
+  } else {
+    return Math.round((distKm / 50) * 60 + 8);
+  }
+}
+
+/**
  * Deterministic K-Means / Medoid Geographic Clustering
  * Clusters coordinate-equipped places into K geographic day groups while balancing load.
+ * Uses scale-normalized capacity penalties for robust behavior across small cities and large regions.
  */
 function clusterGeographicPlaces(
   geoPlaces: ExtractedPlace[],
@@ -95,6 +115,28 @@ function clusterGeographicPlaces(
     });
     return clusters;
   }
+
+  // Compute average distance across points for scale invariance
+  let avgPairDist = 5.0;
+  if (geoPlaces.length > 1) {
+    let sumDist = 0;
+    let countPairs = 0;
+    for (let i = 0; i < geoPlaces.length; i++) {
+      for (let j = i + 1; j < geoPlaces.length; j++) {
+        sumDist += haversineDistance(
+          geoPlaces[i].latitude!,
+          geoPlaces[i].longitude!,
+          geoPlaces[j].latitude!,
+          geoPlaces[j].longitude!
+        );
+        countPairs++;
+      }
+    }
+    if (countPairs > 0) {
+      avgPairDist = Math.max(1.0, sumDist / countPairs);
+    }
+  }
+  const penaltyScale = Math.max(6.0, avgPairDist * 1.5);
 
   // Step A: Select initial cluster centroids deterministically using Farthest-First Traversal
   const centroids: { lat: number; lng: number }[] = [];
@@ -158,7 +200,7 @@ function clusterGeographicPlaces(
         );
         const count = clusters.get(cIdx)!.length;
         const minTarget = Math.floor(idealPerCluster);
-        const capacityPenalty = count >= minTarget ? (count - minTarget + 0.5) * 6 : 0;
+        const capacityPenalty = count >= minTarget ? (count - minTarget + 0.5) * penaltyScale : 0;
         const adjustedDist = dist + capacityPenalty;
 
         if (adjustedDist < minDistance) {
@@ -194,17 +236,23 @@ function clusterGeographicPlaces(
 
 /**
  * Sequences a day's places into an optimal spatial route to minimize backtracking.
+ * Uses Nearest-Neighbor construction followed by 2-Opt local search refinement to eliminate crossing paths.
  */
-function sequenceDayPlaces(places: ExtractedPlace[]): ExtractedPlace[] {
+export function sequenceDayPlaces(places: ExtractedPlace[]): ExtractedPlace[] {
   if (places.length <= 1) return [...places];
 
-  const unvisited = [...places];
-  const route: ExtractedPlace[] = [];
+  const geoPlaces = places.filter(hasValidCoordinates);
+  const nonGeoPlaces = places.filter((p) => !hasValidCoordinates(p));
 
-  // Start with northernmost place for consistent spatial progression
+  if (geoPlaces.length <= 1) {
+    return [...geoPlaces, ...nonGeoPlaces];
+  }
+
+  // Step A: Nearest-Neighbor construction starting from northernmost place
+  const unvisited = [...geoPlaces];
   unvisited.sort((a, b) => (b.latitude || 0) - (a.latitude || 0));
   let current = unvisited.shift()!;
-  route.push(current);
+  const route: ExtractedPlace[] = [current];
 
   while (unvisited.length > 0) {
     let nearestIdx = 0;
@@ -212,25 +260,15 @@ function sequenceDayPlaces(places: ExtractedPlace[]): ExtractedPlace[] {
 
     for (let i = 0; i < unvisited.length; i++) {
       const candidate = unvisited[i];
-      if (hasValidCoordinates(current) && hasValidCoordinates(candidate)) {
-        const dist = haversineDistance(
-          current.latitude!,
-          current.longitude!,
-          candidate.latitude!,
-          candidate.longitude!
-        );
-        if (dist < minDistance) {
-          minDistance = dist;
-          nearestIdx = i;
-        }
-      } else {
-        const cHint = (current.city || current.locationHint || "").toLowerCase().trim();
-        const candHint = (candidate.city || candidate.locationHint || "").toLowerCase().trim();
-        if (cHint && candHint && cHint === candHint) {
-          minDistance = 0.5;
-          nearestIdx = i;
-          break;
-        }
+      const dist = haversineDistance(
+        current.latitude!,
+        current.longitude!,
+        candidate.latitude!,
+        candidate.longitude!
+      );
+      if (dist < minDistance) {
+        minDistance = dist;
+        nearestIdx = i;
       }
     }
 
@@ -238,7 +276,46 @@ function sequenceDayPlaces(places: ExtractedPlace[]): ExtractedPlace[] {
     route.push(current);
   }
 
-  return route;
+  // Step B: 2-Opt Local Search Refinement
+  const computeTotalRouteDistance = (r: ExtractedPlace[]): number => {
+    let d = 0;
+    for (let i = 0; i < r.length - 1; i++) {
+      d += haversineDistance(r[i].latitude!, r[i].longitude!, r[i + 1].latitude!, r[i + 1].longitude!);
+    }
+    return d;
+  };
+
+  let bestRoute = [...route];
+  let bestDistance = computeTotalRouteDistance(bestRoute);
+  let improved = true;
+  let passes = 0;
+  const maxPasses = 50;
+
+  while (improved && passes < maxPasses) {
+    improved = false;
+    passes++;
+
+    for (let i = 0; i < bestRoute.length - 1; i++) {
+      for (let j = i + 1; j < bestRoute.length; j++) {
+        const newRoute = [
+          ...bestRoute.slice(0, i),
+          ...bestRoute.slice(i, j + 1).reverse(),
+          ...bestRoute.slice(j + 1),
+        ];
+        const newDistance = computeTotalRouteDistance(newRoute);
+        if (newDistance < bestDistance - 0.001) {
+          bestRoute = newRoute;
+          bestDistance = newDistance;
+          improved = true;
+          break;
+        }
+      }
+      if (improved) break;
+    }
+  }
+
+  // Append any non-coordinate places matching city hints
+  return [...bestRoute, ...nonGeoPlaces];
 }
 
 /**
@@ -339,17 +416,77 @@ function evaluateSlotScore(
 }
 
 /**
+ * Calculates travel distance (km) and estimated transit minutes for a day schedule,
+ * accounting for accommodation origin/destination if available.
+ */
+export function calculateDayMetrics(day: DaySchedule): { totalDistanceKm: number; totalTravelMinutes: number } {
+  const dayOrderedPlaces = [
+    ...(day.morning || []),
+    ...(day.afternoon || []),
+    ...(day.evening || []),
+  ];
+
+  if (dayOrderedPlaces.length === 0) {
+    return { totalDistanceKm: 0, totalTravelMinutes: 0 };
+  }
+
+  const hotel =
+    day.accommodations && day.accommodations.length > 0 && hasValidCoordinates(day.accommodations[0])
+      ? day.accommodations[0]
+      : null;
+
+  let totalDist = 0;
+  let totalMins = 0;
+
+  // Hotel departure leg
+  if (hotel && dayOrderedPlaces.length > 0 && hasValidCoordinates(dayOrderedPlaces[0])) {
+    const firstPlace = dayOrderedPlaces[0];
+    const depDist = haversineDistance(hotel.latitude!, hotel.longitude!, firstPlace.latitude!, firstPlace.longitude!);
+    if (depDist > 0.05) {
+      totalDist += depDist;
+      totalMins += estimateLegTravelMinutes(depDist);
+    }
+  }
+
+  // Inter-activity legs
+  for (let i = 0; i < dayOrderedPlaces.length - 1; i++) {
+    const p1 = dayOrderedPlaces[i];
+    const p2 = dayOrderedPlaces[i + 1];
+    if (hasValidCoordinates(p1) && hasValidCoordinates(p2)) {
+      const legDist = haversineDistance(p1.latitude!, p1.longitude!, p2.latitude!, p2.longitude!);
+      totalDist += legDist;
+      totalMins += estimateLegTravelMinutes(legDist);
+    }
+  }
+
+  // Hotel return leg
+  if (hotel && dayOrderedPlaces.length > 0 && hasValidCoordinates(dayOrderedPlaces[dayOrderedPlaces.length - 1])) {
+    const lastPlace = dayOrderedPlaces[dayOrderedPlaces.length - 1];
+    const retDist = haversineDistance(lastPlace.latitude!, lastPlace.longitude!, hotel.latitude!, hotel.longitude!);
+    if (retDist > 0.05) {
+      totalDist += retDist;
+      totalMins += estimateLegTravelMinutes(retDist);
+    }
+  }
+
+  return {
+    totalDistanceKm: Math.round(totalDist * 10) / 10,
+    totalTravelMinutes: totalMins,
+  };
+}
+
+/**
  * Intelligent, geographic & category-aware itinerary builder engine.
  *
  * Algorithm Highlights:
  * 1. Deterministic sorting & deduplication of input places.
  * 2. Accommodation isolation as daily hotel references.
- * 3. Pace-aware daily capacity capping (relaxed: 3, normal: 5, packed: 7).
- * 4. K-Means / Medoid geographic day clustering for coordinate-equipped places.
+ * 3. Pace-aware daily capacity capping with overflow preservation.
+ * 4. Scale-normalized K-Means geographic day clustering.
  * 5. City/locationHint fallback distribution for non-coordinate places.
- * 6. Intra-day spatial route sequencing (nearest-neighbor TSP) to avoid backtracking.
+ * 6. Intra-day 2-Opt spatial route sequencing to eliminate crossing paths.
  * 7. Realistic time-slot allocation (morning anchor -> afternoon activity -> evening food/relaxation).
- * 8. Inter-place distance (km) and estimated travel time (minutes) calculations.
+ * 8. Multi-modal travel time (walk/transit/drive) & hotel round-trip tracking.
  */
 export function buildItinerary(
   places: ExtractedPlace[],
@@ -424,6 +561,7 @@ export function buildItinerary(
     dayAssignments.set(d, []);
   }
 
+  const unassignedOverflow: ExtractedPlace[] = [];
   const activeDaysNeeded = Math.min(numDays, activities.length);
 
   // Step 4: Geographic day clustering for coordinate-equipped places with capacity cap
@@ -434,8 +572,11 @@ export function buildItinerary(
     for (let cIdx = 0; cIdx < kClusters; cIdx++) {
       const targetDay = cIdx + 1;
       const assigned = clusterMap.get(cIdx) || [];
-      // Respect max daily capacity to avoid unrealistic overpacking
+      // Respect max daily capacity to avoid unrealistic overpacking, saving overflow
       const cappedAssigned = assigned.slice(0, maxDayCapacity);
+      const overflow = assigned.slice(maxDayCapacity);
+      if (overflow.length > 0) unassignedOverflow.push(...overflow);
+
       dayAssignments.get(targetDay)!.push(...cappedAssigned);
     }
   }
@@ -464,12 +605,23 @@ export function buildItinerary(
         }
         if (dayAssignments.get(minDay)!.length < maxDayCapacity) {
           dayAssignments.get(minDay)!.push(place);
+        } else {
+          unassignedOverflow.push(place);
         }
       }
     }
   }
 
-  // Step 6: For each day, sequence places spatially, assign time slots & calculate transit times
+  if (unassignedOverflow.length > 0) {
+    Object.defineProperty(schedule, "unassignedPlaces", {
+      value: unassignedOverflow,
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    });
+  }
+
+  // Step 6: For each day, sequence places spatially with 2-Opt, assign time slots & calculate transit times
   for (let d = 1; d <= numDays; d++) {
     const dayPlaces = dayAssignments.get(d) || [];
     if (dayPlaces.length === 0) continue;
@@ -530,30 +682,10 @@ export function buildItinerary(
       schedule[d][chosenSlot].push(place);
     }
 
-    // Calculate inter-place travel distance (km) and estimated transit minutes for the day
-    const dayOrderedPlaces = [
-      ...schedule[d].morning,
-      ...schedule[d].afternoon,
-      ...schedule[d].evening,
-    ];
-
-    let totalDist = 0;
-    let totalMins = 0;
-
-    for (let i = 0; i < dayOrderedPlaces.length - 1; i++) {
-      const p1 = dayOrderedPlaces[i];
-      const p2 = dayOrderedPlaces[i + 1];
-      if (hasValidCoordinates(p1) && hasValidCoordinates(p2)) {
-        const legDist = haversineDistance(p1.latitude!, p1.longitude!, p2.latitude!, p2.longitude!);
-        totalDist += legDist;
-        // Urban travel estimate ~25 km/h + 5 min buffer per hop
-        const legMins = Math.round((legDist / 25) * 60 + 5);
-        totalMins += legMins;
-      }
-    }
-
-    schedule[d].totalDistanceKm = Math.round(totalDist * 10) / 10;
-    schedule[d].totalTravelMinutes = totalMins;
+    // Calculate metrics using updated multi-modal & hotel anchoring model
+    const metrics = calculateDayMetrics(schedule[d]);
+    schedule[d].totalDistanceKm = metrics.totalDistanceKm;
+    schedule[d].totalTravelMinutes = metrics.totalTravelMinutes;
   }
 
   return schedule;
@@ -599,30 +731,10 @@ export async function planIntelligentItinerary(
  * Recalculates travel distance (km) and estimated minutes for a day schedule after manual edits.
  */
 export function recalculateDayMetrics(day: DaySchedule): DaySchedule {
-  const dayOrderedPlaces = [
-    ...(day.morning || []),
-    ...(day.afternoon || []),
-    ...(day.evening || []),
-  ];
-
-  let totalDist = 0;
-  let totalMins = 0;
-
-  for (let i = 0; i < dayOrderedPlaces.length - 1; i++) {
-    const p1 = dayOrderedPlaces[i];
-    const p2 = dayOrderedPlaces[i + 1];
-    if (hasValidCoordinates(p1) && hasValidCoordinates(p2)) {
-      const legDist = haversineDistance(p1.latitude!, p1.longitude!, p2.latitude!, p2.longitude!);
-      totalDist += legDist;
-      const legMins = Math.round((legDist / 25) * 60 + 5);
-      totalMins += legMins;
-    }
-  }
-
+  const metrics = calculateDayMetrics(day);
   return {
     ...day,
-    totalDistanceKm: Math.round(totalDist * 10) / 10,
-    totalTravelMinutes: totalMins,
+    totalDistanceKm: metrics.totalDistanceKm,
+    totalTravelMinutes: metrics.totalTravelMinutes,
   };
 }
-

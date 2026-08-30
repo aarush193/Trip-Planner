@@ -210,6 +210,8 @@ export default function PlannerPage() {
     reorderPlaceInSlot,
     addPlaceToSchedule,
     updateTripDuration,
+    resetActiveTrip,
+    clearPlannerPlaces,
     openAuthGate,
     handleSaveTripToCloud,
   } = useTripContext();
@@ -722,6 +724,24 @@ export default function PlannerPage() {
               <Plus className="w-4 h-4 text-[#FF2D78]" />
               <span>+ Plan Another Trip</span>
             </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                if (window.confirm("Are you sure you want to reset this trip? This will clear all extracted places, searches, and schedules for this voyage.")) {
+                  resetActiveTrip();
+                  setDestSearchQuery("");
+                  setAiPromptText("");
+                  setFormError("Trip reset successfully. Ready for a new voyage!");
+                  setTimeout(() => setFormError(null), 3000);
+                }
+              }}
+              className="px-4 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-800 text-xs font-black border-2 border-rose-300 shadow-xs transition-all flex items-center gap-1.5 shrink-0 active:scale-95"
+              title="Clear all places and reset this trip"
+            >
+              <RefreshCw className="w-3.5 h-3.5 text-rose-600" />
+              <span>Reset Voyage</span>
+            </button>
           </div>
         </div>
 
@@ -1049,7 +1069,7 @@ export default function PlannerPage() {
                   </h3>
                 </div>
                 <p className="text-xs text-emerald-100/90 font-medium">
-                  Type your travel ideas, desired attractions, trip length, and pace. Gemini 3.6 Flash extracts structured places into your itinerary.
+                  Type your travel ideas, desired attractions, trip length, and pace. Gemini 3.7 Flash extracts structured places into your itinerary.
                 </p>
               </div>
               <span className="text-[10px] font-black uppercase tracking-wider bg-[#19D3C5] text-[#073B3A] px-3 py-1 rounded-full shadow-xs">
@@ -1379,6 +1399,21 @@ export default function PlannerPage() {
               </p>
             </div>
           </div>
+
+          {extractedPlaces.length > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                if (window.confirm("Clear all extracted places from the planner workspace? Your saved voyages in My Trips will remain preserved.")) {
+                  clearPlannerPlaces();
+                }
+              }}
+              className="px-3.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 font-black text-xs border border-rose-300 transition-colors flex items-center gap-1.5 shrink-0 active:scale-95"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Clear All Places</span>
+            </button>
+          )}
         </div>
 
         {formError && (
@@ -1617,7 +1652,11 @@ export default function PlannerPage() {
                 <button
                   type="button"
                   disabled={tripDaysCount <= 1}
-                  onClick={() => updateTripDuration(tripDaysCount - 1)}
+                  onClick={() => {
+                    const nextDays = Math.max(1, tripDaysCount - 1);
+                    if (activeDay > nextDays) setActiveDay(nextDays);
+                    updateTripDuration(nextDays);
+                  }}
                   className="px-3 py-1.5 hover:bg-[#F5EFE5] text-xs font-black text-[#073B3A] disabled:opacity-30 border-r border-[#e2d9cc]"
                 >
                   -
@@ -1641,34 +1680,38 @@ export default function PlannerPage() {
           </div>
 
           {/* Day Tabs */}
-          <div className="flex items-center gap-2.5 border-b border-[#e2d9cc] pb-3 overflow-x-auto">
-            {Array.from({ length: Math.max(1, tripDaysCount) }, (_, i) => i + 1).map((dayNum) => (
-              <button
-                key={dayNum}
-                type="button"
-                onClick={() => setActiveDay(dayNum)}
-                className={`px-5 py-2.5 rounded-2xl text-xs font-black transition-all duration-200 border-2 ${
-                  activeDay === dayNum
-                    ? "bg-[#FF2D78] text-white border-[#FF2D78] shadow-md glow-pink-shadow"
-                    : "bg-[#F5EFE5] text-[#073B3A] border-[#e2d9cc] hover:bg-emerald-50"
-                }`}
-              >
-                Day {dayNum}
-              </button>
-            ))}
-          </div>
-
-          {/* Daily Schedule Slots */}
           {(() => {
-            const currentDaySchedule = dailySchedule[activeDay] || dailySchedule[1] || {
-              dayNumber: 1,
-              morning: [],
-              afternoon: [],
-              evening: [],
-              accommodations: [],
-              totalDistanceKm: 0,
-              totalTravelMinutes: 0,
-            };
+            const clampedActiveDay = Math.min(activeDay, Math.max(1, tripDaysCount));
+            return (
+              <>
+                <div className="flex items-center gap-2.5 border-b border-[#e2d9cc] pb-3 overflow-x-auto">
+                  {Array.from({ length: Math.max(1, tripDaysCount) }, (_, i) => i + 1).map((dayNum) => (
+                    <button
+                      key={dayNum}
+                      type="button"
+                      onClick={() => setActiveDay(dayNum)}
+                      className={`px-5 py-2.5 rounded-2xl text-xs font-black transition-all duration-200 border-2 ${
+                        clampedActiveDay === dayNum
+                          ? "bg-[#FF2D78] text-white border-[#FF2D78] shadow-md glow-pink-shadow"
+                          : "bg-[#F5EFE5] text-[#073B3A] border-[#e2d9cc] hover:bg-emerald-50"
+                      }`}
+                    >
+                      Day {dayNum}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Daily Schedule Slots */}
+                {(() => {
+                  const currentDaySchedule = dailySchedule[clampedActiveDay] || dailySchedule[1] || {
+                    dayNumber: 1,
+                    morning: [],
+                    afternoon: [],
+                    evening: [],
+                    accommodations: [],
+                    totalDistanceKm: 0,
+                    totalTravelMinutes: 0,
+                  };
 
             const renderSlotPlaces = (
               placesList: ExtractedPlace[],
@@ -1785,7 +1828,7 @@ export default function PlannerPage() {
               <div className="space-y-6">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <h3 className="font-display font-black text-xl text-[#073B3A]">
-                    Day {activeDay} Schedule
+                    Day {clampedActiveDay} Schedule
                   </h3>
                   <div className="flex items-center gap-3">
                     {typeof currentDaySchedule.totalDistanceKm === "number" && currentDaySchedule.totalDistanceKm > 0 && (
@@ -1859,6 +1902,9 @@ export default function PlannerPage() {
               </div>
             );
           })()}
+        </>
+      );
+    })()}
         </section>
       ) : null}
 

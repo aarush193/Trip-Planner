@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { GoogleGenAI, Type } from "@google/genai";
 import { ExtractedPlace, PlaceCategory } from "@/lib/vision";
-import fs from "fs";
-import path from "path";
+import { getApiKey, generateContentWithFallback, PRIMARY_MODEL } from "@/lib/geminiClient";
 
 const VALID_CATEGORIES: PlaceCategory[] = [
   "sightseeing",
@@ -12,67 +11,6 @@ const VALID_CATEGORIES: PlaceCategory[] = [
   "culture",
   "shopping",
 ];
-
-function getApiKey(): string {
-  const envKeys = [
-    process.env.GEMINI_API_KEY,
-    process.env.GOOGLE_GENAI_API_KEY,
-    process.env.GOOGLE_API_KEY,
-    process.env.NEXT_PUBLIC_GEMINI_API_KEY,
-  ];
-
-  for (const raw of envKeys) {
-    if (raw) {
-      const clean = raw.trim().replace(/^["']|["']$/g, "");
-      if (
-        clean &&
-        clean !== "your_gemini_api_key_here" &&
-        !clean.startsWith("your_gemini_api_key")
-      ) {
-        return clean;
-      }
-    }
-  }
-
-  try {
-    const envPaths = [
-      path.join(process.cwd(), ".env.local"),
-      path.join(process.cwd(), ".env"),
-      path.join(process.cwd(), ".env.development"),
-    ];
-
-    for (const envPath of envPaths) {
-      if (fs.existsSync(/*turbopackIgnore: true*/ envPath)) {
-        const content = fs.readFileSync(/*turbopackIgnore: true*/ envPath, "utf-8");
-        const lines = content.split(/\r?\n/);
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (trimmed.startsWith("#") || !trimmed.includes("=")) continue;
-          const [key, ...valParts] = trimmed.split("=");
-          const keyName = key.trim();
-          if (
-            ["GEMINI_API_KEY", "GOOGLE_GENAI_API_KEY", "GOOGLE_API_KEY", "NEXT_PUBLIC_GEMINI_API_KEY"].includes(
-              keyName
-            )
-          ) {
-            const rawVal = valParts.join("=").trim().replace(/^["']|["']$/g, "");
-            if (
-              rawVal &&
-              rawVal !== "your_gemini_api_key_here" &&
-              !rawVal.startsWith("your_gemini_api_key")
-            ) {
-              return rawVal;
-            }
-          }
-        }
-      }
-    }
-  } catch (err) {
-    console.error("Error reading env files from disk:", err);
-  }
-
-  return "";
-}
 
 function isValidCoordinate(lat?: number, lon?: number): boolean {
   return (
@@ -205,7 +143,7 @@ export async function POST(request: Request) {
     const targetCount = Math.max(8, Math.min(24, Math.max(1, tripDays) * 4 - anchorPlaces.length));
     const apiKey = getApiKey();
 
-    // 1. Primary Discovery Engine: Gemini 3.6 Flash
+    // 1. Primary Discovery Engine: Gemini 3.7 Flash
     if (apiKey) {
       try {
         const anchorsText = anchorPlaces
@@ -238,8 +176,8 @@ For each place:
 
 Return structured JSON adhering to the schema.`;
 
-        const result = await ai.models.generateContent({
-          model: "gemini-3.6-flash",
+        const result = await generateContentWithFallback(ai, {
+          model: PRIMARY_MODEL,
           contents: [{ role: "user", parts: [{ text: prompt }] }],
           config: {
             responseMimeType: "application/json",

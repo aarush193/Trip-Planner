@@ -10,7 +10,10 @@ function assert(condition: boolean, message: string) {
 function countTotalAssigned(schedule: ReturnType<typeof buildItinerary>): number {
   let count = 0;
   for (const d in schedule) {
-    count += schedule[d].morning.length + schedule[d].afternoon.length + schedule[d].evening.length;
+    const day = schedule[d];
+    if (day && Array.isArray(day.morning) && Array.isArray(day.afternoon) && Array.isArray(day.evening)) {
+      count += day.morning.length + day.afternoon.length + day.evening.length;
+    }
   }
   return count;
 }
@@ -576,12 +579,86 @@ assert(ensureValidUuid(uuid1) === uuid1, "Existing UUID preserved as-is.");
 
 console.log("✅ Test 36 passed.");
 
+// 37. 2-Opt TSP Spatial Route Optimizer Verification
+console.log("\nTest 37: 2-Opt TSP Spatial Route Optimizer Verification...");
+const { sequenceDayPlaces, estimateLegTravelMinutes, calculateDayMetrics } = require("./itineraryEngine");
+
+// 4 points arranged in a non-convex polygon where a crossing route is suboptimal
+const crossingPoints: ExtractedPlace[] = [
+  { id: "cp-1", title: "Top-Left", category: "sightseeing", latitude: 48.88, longitude: 2.30 },
+  { id: "cp-2", title: "Top-Right", category: "sightseeing", latitude: 48.88, longitude: 2.36 },
+  { id: "cp-3", title: "Bottom-Right", category: "sightseeing", latitude: 48.84, longitude: 2.36 },
+  { id: "cp-4", title: "Bottom-Left", category: "sightseeing", latitude: 48.84, longitude: 2.30 },
+];
+const sequencedRoute = sequenceDayPlaces(crossingPoints);
+assert(sequencedRoute.length === 4, "All 4 points must be preserved in sequenced route.");
+let optimizedDist = 0;
+for (let i = 0; i < sequencedRoute.length - 1; i++) {
+  optimizedDist += haversineDistance(
+    sequencedRoute[i].latitude!,
+    sequencedRoute[i].longitude!,
+    sequencedRoute[i + 1].latitude!,
+    sequencedRoute[i + 1].longitude!
+  );
+}
+// Perimeter route length should be approx ~12.8 km, while diagonal cross would be ~17 km
+assert(optimizedDist < 16.0, "2-Opt must eliminate crossing diagonals to yield efficient tour.");
+console.log(`✅ Test 37 passed (Optimized tour distance: ${Math.round(optimizedDist * 10) / 10} km).`);
+
+// 38. Multi-Modal Travel Time Estimation (Walking vs Transit vs Driving)
+console.log("\nTest 38: Multi-Modal Travel Time Estimation...");
+const walkMins = estimateLegTravelMinutes(0.8); // 800m
+const transitMins = estimateLegTravelMinutes(5.0); // 5km urban
+const driveMins = estimateLegTravelMinutes(30.0); // 30km regional
+
+assert(walkMins >= 8 && walkMins <= 12, "800m walking should estimate approx 10 mins.");
+assert(transitMins >= 15 && transitMins <= 22, "5km urban transit should estimate approx 18 mins.");
+assert(driveMins >= 40 && driveMins <= 50, "30km regional drive should estimate approx 44 mins.");
+console.log(`✅ Test 38 passed (Walk 0.8km: ${walkMins}m, Transit 5km: ${transitMins}m, Drive 30km: ${driveMins}m).`);
+
+// 39. Hotel Round-Trip Anchoring (Departure & Return)
+console.log("\nTest 39: Hotel Round-Trip Anchoring...");
+const testDayWithHotel = {
+  dayNumber: 1,
+  morning: [{ id: "act-1", title: "Morning Sight", category: "sightseeing" as PlaceCategory, latitude: 48.858, longitude: 2.294 }],
+  afternoon: [{ id: "act-2", title: "Afternoon Sight", category: "culture" as PlaceCategory, latitude: 48.860, longitude: 2.337 }],
+  evening: [],
+  accommodations: [{ id: "hotel-1", title: "Hotel Le Meurice", category: "stay" as PlaceCategory, latitude: 48.865, longitude: 2.328 }],
+};
+const dayMetrics = calculateDayMetrics(testDayWithHotel);
+assert(dayMetrics.totalDistanceKm > 0, "Distance must include hotel departure and return legs.");
+assert(dayMetrics.totalTravelMinutes > 0, "Travel minutes must include hotel transit.");
+console.log(`✅ Test 39 passed (Hotel Round-Trip Day Distance: ${dayMetrics.totalDistanceKm} km, Travel Time: ${dayMetrics.totalTravelMinutes} mins).`);
+
+// 40. Multi-City Compound Destination Scoring & Overflow Preservation
+console.log("\nTest 40: Multi-City Compound Destination Scoring & Overflow Preservation...");
+const portoSpot: ExtractedPlace = { id: "porto-1", title: "Clérigos Tower", category: "sightseeing", city: "Porto", locationHint: "Porto, Portugal" };
+const lisbonSpot: ExtractedPlace = { id: "lisbon-1", title: "Belém Tower", category: "sightseeing", city: "Lisbon", locationHint: "Lisbon, Portugal" };
+
+const portoMultiScore = evaluateDestinationRelevance(portoSpot, "Lisbon and Porto, Portugal");
+const lisbonMultiScore = evaluateDestinationRelevance(lisbonSpot, "Lisbon and Porto, Portugal");
+assert(portoMultiScore > 10, "Porto must score Tier 1 (+15) for compound 'Lisbon and Porto' query.");
+assert(lisbonMultiScore > 10, "Lisbon must score Tier 1 (+15) for compound 'Lisbon and Porto' query.");
+
+// Verify Overflow preservation on overloaded trip
+const heavyOverflowPlaces: ExtractedPlace[] = Array.from({ length: 15 }, (_, i) => ({
+  id: `ovf-${i}`,
+  title: `Overflow Spot ${i + 1}`,
+  category: "sightseeing",
+  latitude: 48.85 + i * 0.003,
+  longitude: 2.29 + i * 0.003,
+}));
+const schedWithOverflow = buildItinerary(heavyOverflowPlaces, 1, "normal");
+assert(Boolean(schedWithOverflow.unassignedPlaces && schedWithOverflow.unassignedPlaces.length > 0), "Overloaded schedule must preserve dropped places in unassignedPlaces pool.");
+assert(schedWithOverflow.unassignedPlaces!.length === 9, "15 places on 1-day normal pace (cap 6) must preserve exactly 9 unassigned places.");
+console.log(`✅ Test 40 passed (Preserved ${schedWithOverflow.unassignedPlaces!.length} unassigned places in overflow pool).`);
+
 async function runAsyncTests() {
   await runTest17();
   await runTest18();
   await runTest20();
   await runTest27();
-  console.log("\n=== ALL 36 MANDATORY TEST SUITES PASSED PASSED ✅ ===");
+  console.log("\n=== ALL 40 MANDATORY TEST SUITES PASSED ✅ ===");
 }
 
 runAsyncTests().catch((err) => {

@@ -81,7 +81,7 @@ Run the following script in the **[Supabase SQL Editor](https://supabase.com/das
 ```sql
 -- 1. Trips Table
 CREATE TABLE IF NOT EXISTS public.trips (
-  id UUID PRIMARY KEY,
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
   destination TEXT NOT NULL,
   start_date DATE,
@@ -93,16 +93,20 @@ CREATE TABLE IF NOT EXISTS public.trips (
 
 -- 2. Places Table
 CREATE TABLE IF NOT EXISTS public.places (
-  id UUID PRIMARY KEY,
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   trip_id UUID REFERENCES public.trips(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
   category TEXT DEFAULT 'sightseeing',
+  location_hint TEXT,
   address TEXT,
-  lat DOUBLE PRECISION,
-  lng DOUBLE PRECISION,
-  image_url TEXT,
-  rating DOUBLE PRECISION,
+  city TEXT,
+  latitude DOUBLE PRECISION,
+  longitude DOUBLE PRECISION,
+  confidence DOUBLE PRECISION,
+  raw_detected_text TEXT,
   notes TEXT,
+  estimated_cost TEXT,
+  enrichment_status TEXT DEFAULT 'pending',
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
@@ -126,26 +130,53 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   updated_at TIMESTAMPTZ DEFAULT now()
 );
 
--- 5. Enable Row Level Security (RLS)
+-- 5. Grant Schema & Table Privileges to Authenticated & Anon Roles
+GRANT USAGE ON SCHEMA public TO postgres, anon, authenticated, service_role;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO postgres, anon, authenticated, service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO postgres, anon, authenticated, service_role;
+GRANT ALL ON ALL ROUTINES IN SCHEMA public TO postgres, anon, authenticated, service_role;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO postgres, anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO postgres, anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON ROUTINES TO postgres, anon, authenticated, service_role;
+
+-- 6. Enable Row Level Security (RLS)
 ALTER TABLE public.trips ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.places ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.itinerary_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 
--- 6. RLS Policies
+-- 7. Drop Old Policies (if any)
+DROP POLICY IF EXISTS "Users access own trips" ON public.trips;
+DROP POLICY IF EXISTS "Users access own places" ON public.places;
+DROP POLICY IF EXISTS "Users access own itinerary items" ON public.itinerary_items;
+DROP POLICY IF EXISTS "Users access own profile" ON public.profiles;
+DROP POLICY IF EXISTS "Allow all for authenticated" ON public.trips;
+DROP POLICY IF EXISTS "Allow all for authenticated places" ON public.places;
+DROP POLICY IF EXISTS "Allow all for authenticated itinerary" ON public.itinerary_items;
+
+-- 8. Clean RLS Policies for Authenticated & Guest Access
 CREATE POLICY "Users access own trips" ON public.trips
-  FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+  FOR ALL TO authenticated, anon
+  USING (user_id IS NULL OR user_id = auth.uid())
+  WITH CHECK (user_id IS NULL OR user_id = auth.uid());
 
 CREATE POLICY "Users access own places" ON public.places
-  FOR ALL USING (EXISTS (SELECT 1 FROM public.trips WHERE trips.id = places.trip_id AND trips.user_id = auth.uid()));
+  FOR ALL TO authenticated, anon
+  USING (EXISTS (SELECT 1 FROM public.trips WHERE trips.id = places.trip_id AND (trips.user_id IS NULL OR trips.user_id = auth.uid())))
+  WITH CHECK (EXISTS (SELECT 1 FROM public.trips WHERE trips.id = places.trip_id AND (trips.user_id IS NULL OR trips.user_id = auth.uid())));
 
 CREATE POLICY "Users access own itinerary items" ON public.itinerary_items
-  FOR ALL USING (EXISTS (SELECT 1 FROM public.trips WHERE trips.id = itinerary_items.trip_id AND trips.user_id = auth.uid()));
+  FOR ALL TO authenticated, anon
+  USING (EXISTS (SELECT 1 FROM public.trips WHERE trips.id = itinerary_items.trip_id AND (trips.user_id IS NULL OR trips.user_id = auth.uid())))
+  WITH CHECK (EXISTS (SELECT 1 FROM public.trips WHERE trips.id = itinerary_items.trip_id AND (trips.user_id IS NULL OR trips.user_id = auth.uid())));
 
 CREATE POLICY "Users access own profile" ON public.profiles
-  FOR ALL USING (auth.uid() = id);
+  FOR ALL TO authenticated
+  USING (auth.uid() = id)
+  WITH CHECK (auth.uid() = id);
 
--- 7. Automatic Profile Creation Trigger Function
+-- 9. Automatic Profile Creation Trigger Function
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -159,6 +190,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
